@@ -55,8 +55,10 @@ class IntelFCompiler(BaseIntelFCompiler):
     def get_flags(self):
         return ['-fPIC']
 
-    def get_flags_opt(self):
-        return ['-xhost -openmp -fp-model strict']
+    def get_flags_opt(self):  # Scipy test failures with -O2
+        v = self.get_version()
+        mpopt = 'openmp' if v and v < '15' else 'qopenmp'
+        return ['-fp-model strict -O1 -{}'.format(mpopt)]
 
     def get_flags_arch(self):
         return []
@@ -119,11 +121,13 @@ class IntelEM64TFCompiler(IntelFCompiler):
     def get_flags(self):
         return ['-fPIC']
 
-    def get_flags_opt(self):
-        return ['-openmp -fp-model strict']
+    def get_flags_opt(self):  # Scipy test failures with -O2
+        v = self.get_version()
+        mpopt = 'openmp' if v and v < '15' else 'qopenmp'
+        return ['-fp-model strict -O1 -{}'.format(mpopt)]
 
     def get_flags_arch(self):
-        return ['-xSSE4.2']
+        return ['']
 
 # Is there no difference in the version string between the above compilers
 # and the Visual compilers?
@@ -202,16 +206,14 @@ class IntelEM64VisualFCompiler(IntelVisualFCompiler):
     compiler_type = 'intelvem'
     description = 'Intel Visual Fortran Compiler for 64-bit apps'
 
-    version_match = simple_version_match(start='Intel\(R\).*?64,')
+    version_match = simple_version_match(start=r'Intel\(R\).*?64,')
 
     def get_flags_arch(self):
-        return ['/QxSSE4.2']
+        return ['']
 
 
 if __name__ == '__main__':
     from distutils import log
     log.set_verbosity(2)
-    from numpy.distutils.fcompiler import new_fcompiler
-    compiler = new_fcompiler(compiler='intel')
-    compiler.customize()
-    print(compiler.get_version())
+    from numpy.distutils import customized_fcompiler
+    print(customized_fcompiler(compiler='intel').get_version())

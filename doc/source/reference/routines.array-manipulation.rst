@@ -26,6 +26,7 @@ Transpose-like operations
 .. autosummary::
    :toctree: generated/
 
+   moveaxis
    rollaxis
    swapaxes
    ndarray.T
@@ -71,6 +72,7 @@ Joining arrays
    dstack
    hstack
    vstack
+   block
 
 Splitting arrays
 ================
@@ -108,6 +110,7 @@ Rearranging elements
 .. autosummary::
    :toctree: generated/
 
+   flip
    fliplr
    flipud
    reshape

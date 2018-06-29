@@ -10,6 +10,10 @@ array_set_typeDict(PyObject *NPY_UNUSED(ignored), PyObject *args);
 NPY_NO_EXPORT PyArray_Descr *
 _arraydescr_fromobj(PyObject *obj);
 
+
+NPY_NO_EXPORT int
+is_dtype_struct_simple_unaligned_layout(PyArray_Descr *dtype);
+
 /*
  * Creates a string repr of the dtype, excluding the 'dtype()' part
  * surrounding the object. This object may be a string, a list, or
@@ -36,8 +40,6 @@ NPY_NO_EXPORT PyObject *
 arraydescr_construction_repr(PyArray_Descr *dtype, int includealignflag,
                                 int shortrepr);
 
-#ifdef NPY_ENABLE_SEPARATE_COMPILATION
 extern NPY_NO_EXPORT char *_datetime_strings[];
-#endif
 
 #endif

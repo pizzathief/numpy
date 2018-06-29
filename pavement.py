@@ -1,5 +1,5 @@
-"""
-This paver file is intented to help with the release process as much as
+r"""
+This paver file is intended to help with the release process as much as
 possible. It relies on virtualenv to generate 'bootstrap' environments as
 independent from the user system as possible (e.g. to make sure the sphinx doc
 is built against the built numpy, not an installed one).
@@ -18,7 +18,7 @@ as follows::
     paver bootstrap && source bootstrap/bin/activate
     # Installing numpy is necessary to build the correct documentation (because
     # of autodoc)
-    python setupegg.py install
+    python setup.py install
     paver dmg
 
 Building a simple (no-superpack) windows installer from wine
@@ -54,7 +54,7 @@ TODO
     - fix bdist_mpkg: we build the same source twice -> how to make sure we use
       the same underlying python for egg install in venv and for bdist_mpkg
 """
-from __future__ import division, absolute_import, print_function
+from __future__ import division, print_function
 
 # What need to be installed to build everything on mac os x:
 #   - wine: python 2.6 and 2.5 + makensis + cpuid plugin + mingw, all in the PATH
@@ -65,11 +65,7 @@ import sys
 import shutil
 import subprocess
 import re
-try:
-    from hashlib import md5
-    from hashlib import sha256
-except ImportError:
-    from md5 import md5
+import hashlib
 
 import paver
 from paver.easy import \
@@ -99,10 +95,10 @@ finally:
 #-----------------------------------
 
 # Source of the release notes
-RELEASE_NOTES = 'doc/release/1.11.0-notes.rst'
+RELEASE_NOTES = 'doc/release/1.16.0-notes.rst'
 
 # Start/end of the log (from git)
-LOG_START = 'v1.10.0b1'
+LOG_START = 'maintenance/1.15.x'
 LOG_END = 'master'
 
 
@@ -150,21 +146,15 @@ SITECFG = {"sse2" : SSE2_CFG, "sse3" : SSE3_CFG, "nosse" : NOSSE_CFG}
 if sys.platform =="darwin":
     WINDOWS_PYTHON = {
         "3.4": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python34/python.exe"],
-        "3.3": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python33/python.exe"],
-        "3.2": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python32/python.exe"],
         "2.7": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python27/python.exe"],
-        "2.6": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python26/python.exe"],
     }
     WINDOWS_ENV = os.environ
     WINDOWS_ENV["DYLD_FALLBACK_LIBRARY_PATH"] = "/usr/X11/lib:/usr/lib"
     MAKENSIS = ["wine", "makensis"]
 elif sys.platform == "win32":
     WINDOWS_PYTHON = {
-        "3.4": ["C:\Python34\python.exe"],
-        "3.3": ["C:\Python33\python.exe"],
-        "3.2": ["C:\Python32\python.exe"],
-        "2.7": ["C:\Python27\python.exe"],
-        "2.6": ["C:\Python26\python.exe"],
+        "3.4": [r"C:\Python34\python.exe"],
+        "2.7": [r"C:\Python27\python.exe"],
     }
     # XXX: find out which env variable is necessary to avoid the pb with python
     # 2.6 and random module when importing tempfile
@@ -173,10 +163,7 @@ elif sys.platform == "win32":
 else:
     WINDOWS_PYTHON = {
         "3.4": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python34/python.exe"],
-        "3.3": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python33/python.exe"],
-        "3.2": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python32/python.exe"],
         "2.7": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python27/python.exe"],
-        "2.6": ["wine", os.environ['HOME'] + "/.wine/drive_c/Python26/python.exe"],
     }
     WINDOWS_ENV = os.environ
     MAKENSIS = ["wine", "makensis"]
@@ -418,7 +405,7 @@ def macosx_version():
         raise ValueError("Not darwin ??")
     st = subprocess.Popen(["sw_vers"], stdout=subprocess.PIPE)
     out = st.stdout.readlines()
-    ver = re.compile("ProductVersion:\s+([0-9]+)\.([0-9]+)\.([0-9]+)")
+    ver = re.compile(r"ProductVersion:\s+([0-9]+)\.([0-9]+)\.([0-9]+)")
     for i in out:
         m = ver.match(i)
         if m:
@@ -440,7 +427,7 @@ def _build_mpkg(pyver):
         ldflags = "-undefined dynamic_lookup -bundle -arch i386 -arch ppc -Wl,-search_paths_first"
 
     ldflags += " -L%s" % os.path.join(os.path.dirname(__file__), "build")
-    sh("LDFLAGS='%s' %s setupegg.py bdist_mpkg" % (ldflags, " ".join(MPKG_PYTHON[pyver])))
+    sh("LDFLAGS='%s' %s setup.py bdist_mpkg" % (ldflags, " ".join(MPKG_PYTHON[pyver])))
 
 @task
 def simple_dmg():
@@ -486,7 +473,7 @@ def _create_dmg(pyver, src_dir, volname=None):
 def dmg(options):
     try:
         pyver = options.dmg.python_version
-    except:
+    except Exception:
         pyver = DEFAULT_PYTHON
     idirs = options.installers.installersdir
 
@@ -495,7 +482,7 @@ def dmg(options):
     user = os.path.join(options.doc.destdir_pdf, "userguide.pdf")
     if (not os.path.exists(ref)) or (not os.path.exists(user)):
         import warnings
-        warnings.warn("Docs need to be built first! Can't find them.")
+        warnings.warn("Docs need to be built first! Can't find them.", stacklevel=2)
 
     # Build the mpkg package
     call_task("clean")
@@ -549,8 +536,16 @@ def tarball_name(type='gztar'):
 
 @task
 def sdist(options):
+    # First clean the repo and update submodules (for up-to-date doc html theme
+    # and Sphinx extensions)
+    sh('git clean -xdf')
+    sh('git submodule init')
+    sh('git submodule update')
+
     # To be sure to bypass paver when building sdist... paver + numpy.distutils
     # do not play well together.
+    # Cython is run over all Cython files in setup.py, so generated C files
+    # will be included.
     sh('python setup.py sdist --formats=gztar,zip')
 
     # Copy the superpack into installers dir
@@ -563,70 +558,91 @@ def sdist(options):
         target = os.path.join(idirs, tarball_name(t))
         shutil.copy(source, target)
 
-def compute_md5(idirs):
+def _compute_hash(idirs, algo):
     released = paver.path.path(idirs).listdir()
     checksums = []
     for f in sorted(released):
-        m = md5(open(f, 'r').read())
-        checksums.append('%s  %s' % (m.hexdigest(), os.path.basename(f)))
-
+        with open(f, 'r') as _file:
+            m = algo(_file.read())
+            checksums.append('%s  %s' % (m.hexdigest(), os.path.basename(f)))
     return checksums
+
+def compute_md5(idirs):
+    return _compute_hash(idirs, hashlib.md5)
 
 def compute_sha256(idirs):
-    # better checksum so gpg signed README.txt containing the sums can be used
+    # better checksum so gpg signed README.rst containing the sums can be used
     # to verify the binaries instead of signing all binaries
-    released = paver.path.path(idirs).listdir()
-    checksums = []
-    for f in sorted(released):
-        m = sha256(open(f, 'r').read())
-        checksums.append('%s  %s' % (m.hexdigest(), os.path.basename(f)))
+    return _compute_hash(idirs, hashlib.sha256)
 
-    return checksums
-
-def write_release_task(options, filename='NOTES.txt'):
+def write_release_task(options, filename='README'):
     idirs = options.installers.installersdir
     source = paver.path.path(RELEASE_NOTES)
-    target = paver.path.path(filename)
+    target = paver.path.path(filename + '.rst')
     if target.exists():
         target.remove()
-    source.copy(target)
-    ftarget = open(str(target), 'a')
-    ftarget.writelines("""
+
+    tmp_target = paver.path.path(filename + '.md')
+    source.copy(tmp_target)
+
+    with open(str(tmp_target), 'a') as ftarget:
+        ftarget.writelines("""
 Checksums
 =========
 
 MD5
-~~~
+---
 
 """)
-    ftarget.writelines(['%s\n' % c for c in compute_md5(idirs)])
-    ftarget.writelines("""
+        ftarget.writelines(['    %s\n' % c for c in compute_md5(idirs)])
+        ftarget.writelines("""
 SHA256
-~~~~~~
+------
 
 """)
-    ftarget.writelines(['%s\n' % c for c in compute_sha256(idirs)])
+        ftarget.writelines(['    %s\n' % c for c in compute_sha256(idirs)])
+
+    # Sign release
+    cmd = ['gpg', '--clearsign', '--armor']
+    if hasattr(options, 'gpg_key'):
+        cmd += ['--default-key', options.gpg_key]
+    cmd += ['--output', str(target), str(tmp_target)]
+    subprocess.check_call(cmd)
+    print("signed %s" % (target,))
+
+    # Change PR links for github posting, don't sign this
+    # as the signing isn't markdown compatible.
+    with open(str(tmp_target), 'r') as ftarget:
+        mdtext = ftarget.read()
+        mdtext = re.sub(r'^\* `(\#[0-9]*).*?`__', r'* \1', mdtext, flags=re.M)
+    with open(str(tmp_target), 'w') as ftarget:
+        ftarget.write(mdtext)
+
 
 def write_log_task(options, filename='Changelog'):
     st = subprocess.Popen(
-            ['git', 'log',  '%s..%s' % (LOG_START, LOG_END)],
-            stdout=subprocess.PIPE)
+        ['git', 'log', '--no-merges', '--use-mailmap',
+         '%s..%s' % (LOG_START, LOG_END)],
+        stdout=subprocess.PIPE)
 
     out = st.communicate()[0]
     a = open(filename, 'w')
     a.writelines(out)
     a.close()
 
+
 @task
 def write_release(options):
     write_release_task(options)
+
 
 @task
 def write_log(options):
     write_log_task(options)
 
+
 @task
 def write_release_and_log(options):
     rdir = options.installers.releasedir
-    write_release_task(options, os.path.join(rdir, 'NOTES.txt'))
+    write_release_task(options, os.path.join(rdir, 'README'))
     write_log_task(options, os.path.join(rdir, 'Changelog'))

@@ -16,11 +16,12 @@ import atexit
 import textwrap
 import re
 import random
-
-import nose
+import pytest
+import numpy.f2py
 
 from numpy.compat import asbytes, asstr
-import numpy.f2py
+from numpy.testing import SkipTest, temppath
+from importlib import import_module
 
 try:
     from hashlib import md5
@@ -147,8 +148,7 @@ def build_module(source_files, options=[], skip=[], only=[], module_name=None):
             os.unlink(fn)
 
     # Import
-    __import__(module_name)
-    return sys.modules[module_name]
+    return import_module(module_name)
 
 
 @_memoize
@@ -160,16 +160,11 @@ def build_code(source_code, options=[], skip=[], only=[], suffix=None,
     """
     if suffix is None:
         suffix = '.f'
-
-    fd, tmp_fn = tempfile.mkstemp(suffix=suffix)
-    os.write(fd, asbytes(source_code))
-    os.close(fd)
-
-    try:
-        return build_module([tmp_fn], options=options, skip=skip, only=only,
+    with temppath(suffix=suffix) as path:
+        with open(path, 'w') as f:
+            f.write(source_code)
+        return build_module([path], options=options, skip=skip, only=only,
                             module_name=module_name)
-    finally:
-        os.unlink(tmp_fn)
 
 #
 # Check if compilers are available at all...
@@ -210,22 +205,19 @@ sys.exit(99)
 """
     code = code % dict(syspath=repr(sys.path))
 
-    fd, script = tempfile.mkstemp(suffix='.py')
-    os.write(fd, asbytes(code))
-    os.close(fd)
+    with temppath(suffix='.py') as script:
+        with open(script, 'w') as f:
+            f.write(code)
 
-    try:
         cmd = [sys.executable, script, 'config']
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT)
         out, err = p.communicate()
-        m = re.search(asbytes(r'COMPILERS:(\d+),(\d+),(\d+)'), out)
-        if m:
-            _compiler_status = (bool(int(m.group(1))), bool(int(m.group(2))),
-                                bool(int(m.group(3))))
-    finally:
-        os.unlink(script)
 
+    m = re.search(br'COMPILERS:(\d+),(\d+),(\d+)', out)
+    if m:
+        _compiler_status = (bool(int(m.group(1))), bool(int(m.group(2))),
+                            bool(int(m.group(3))))
     # Finished
     return _compiler_status
 
@@ -328,13 +320,16 @@ class F2PyTest(object):
     module = None
     module_name = None
 
-    def setUp(self):
+    def setup(self):
+        if sys.platform == 'win32':
+            raise SkipTest('Fails with MinGW64 Gfortran (Issue #9673)')
+
         if self.module is not None:
             return
 
         # Check compiler availability first
         if not has_c_compiler():
-            raise nose.SkipTest("No C compiler available")
+            raise SkipTest("No C compiler available")
 
         codes = []
         if self.sources:
@@ -350,9 +345,9 @@ class F2PyTest(object):
             elif fn.endswith('.f90'):
                 needs_f90 = True
         if needs_f77 and not has_f77_compiler():
-            raise nose.SkipTest("No Fortran 77 compiler available")
+            raise SkipTest("No Fortran 77 compiler available")
         if needs_f90 and not has_f90_compiler():
-            raise nose.SkipTest("No Fortran 90 compiler available")
+            raise SkipTest("No Fortran 90 compiler available")
 
         # Build the module
         if self.code is not None:

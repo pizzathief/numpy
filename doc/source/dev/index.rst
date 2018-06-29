@@ -1,5 +1,5 @@
 #####################
-Contributing to Numpy
+Contributing to NumPy
 #####################
 
 .. toctree::
@@ -7,6 +7,7 @@ Contributing to Numpy
 
    gitwash/index
    development_environment
+   releasing
    governance/index
 
 For core developers: see :ref:`development-workflow`.

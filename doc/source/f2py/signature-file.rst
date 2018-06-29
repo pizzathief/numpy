@@ -21,7 +21,7 @@ scanning Fortran codes and writing a signature file, F2PY lowers all
 cases automatically except in multiline blocks or when ``--no-lower``
 option is used.
 
-The syntax of signature files is overvied below.
+The syntax of signature files is presented below.
 
 Python module block
 =====================
@@ -56,7 +56,7 @@ A ``python module`` block has the following structure::
     ]...
   end [python module [<modulename>]]
 
-Here brackets ``[]`` indicate a optional part, dots ``...`` indicate
+Here brackets ``[]`` indicate an optional part, dots ``...`` indicate
 one or more of a previous part. So, ``[]...`` reads zero or more of a
 previous part.
 
@@ -178,12 +178,13 @@ Common block statements:
 
     <shortentitydecl> := <name> [ ( <arrayspec> ) ] [ , <shortentitydecl> ]
 
-  One ``python module`` block should not contain two or more
-  ``common`` blocks with the same name. Otherwise, the latter ones are
-  ignored. The types of variables in ``<shortentitydecl>`` are defined
-  using ``<argument type declarations>``. Note that the corresponding
-  ``<argument type declarations>`` may contain array specifications;
-  then you don't need to specify these in ``<shortentitydecl>``.
+  If a ``python module`` block contains two or more ``common`` blocks
+  with the same name, the variables from the additional declarations
+  are appended.  The types of variables in ``<shortentitydecl>`` are
+  defined using ``<argument type declarations>``. Note that the
+  corresponding ``<argument type declarations>`` may contain array
+  specifications; then you don't need to specify these in
+  ``<shortentitydecl>``.
 
 Other statements:
   The ``<other statement>`` part refers to any other Fortran language
@@ -283,7 +284,7 @@ Other statements:
       module`` block then the second multiline block is inserted
       after the definition of external routines.
 
-      When used inside ``<routine singature>``, then given C code will
+      When used inside ``<routine signature>``, then given C code will
       be inserted to the corresponding wrapper function just after
       declaring variables but before any C statements. So, ``usercode``
       follow-up can contain both declarations and C statements.
@@ -302,7 +303,7 @@ Other statements:
       ``pymethoddef`` statement can be used only inside
       ``python module`` block.
 
-  __ http://www.python.org/doc/current/ext/ext.html
+  __ https://docs.python.org/extending/index.html
 
 Attributes
 ------------
@@ -325,7 +326,7 @@ The following attributes are used by F2PY:
   default. You need to specify ``required`` only if there is a need to
   disable automatic ``optional`` setting when ``<init_expr>`` is used.
 
-  If Python ``None`` object is used as an required argument, the
+  If Python ``None`` object is used as a required argument, the
   argument is treated as optional. That is, in the case of array
   argument, the memory is allocated. And if ``<init_expr>`` is given,
   the corresponding initialization is carried out.
@@ -347,9 +348,9 @@ The following attributes are used by F2PY:
   + ``inout``
       The argument is considered as an input/output or *in situ*
       output argument. ``intent(inout)`` arguments can be only
-      "contiguous" Numpy arrays with proper type and size.  Here
+      "contiguous" NumPy arrays with proper type and size.  Here
       "contiguous" can be either in Fortran or C sense. The latter one
-      coincides with the contiguous concept used in Numpy and is
+      coincides with the contiguous concept used in NumPy and is
       effective only if ``intent(c)`` is used. Fortran contiguity
       is assumed by default.
 
@@ -359,7 +360,7 @@ The following attributes are used by F2PY:
   + ``inplace``
       The argument is considered as an input/output or *in situ*
       output argument. ``intent(inplace)`` arguments must be
-      Numpy arrays with proper size. If the type of an array is
+      NumPy arrays with proper size. If the type of an array is
       not "proper" or the array is non-contiguous then the array
       will be changed in-place to fix the type and make it contiguous.
 
@@ -369,7 +370,7 @@ The following attributes are used by F2PY:
       slices data pointers may point to unallocated memory area.
 
   + ``out``
-      The argument is considered as an return variable. It is appended
+      The argument is considered as a return variable. It is appended
       to the ``<returned variables>`` list. Using ``intent(out)``
       sets ``intent(hide)`` automatically, unless also
       ``intent(in)`` or ``intent(inout)`` were used.
@@ -400,8 +401,8 @@ The following attributes are used by F2PY:
       a C function. This is because the concepts of Fortran- and
       C contiguity overlap in one-dimensional cases.
 
-      If ``intent(c)`` is used as an statement but without entity
-      declaration list, then F2PY adds ``intent(c)`` attibute to all
+      If ``intent(c)`` is used as a statement but without an entity
+      declaration list, then F2PY adds the ``intent(c)`` attribute to all
       arguments.
 
       Also, when wrapping C functions, one must use ``intent(c)``
@@ -596,7 +597,7 @@ A C expression may contain:
   ``shape(<name>,<n>)``
     Returns the ``<n>``-th dimension of an array ``<name>``.
   ``len(<name>)``
-    Returns the lenght of an array ``<name>``.
+    Returns the length of an array ``<name>``.
   ``size(<name>)``
     Returns the size of an array ``<name>``.
   ``slen(<name>)``

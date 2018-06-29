@@ -7,6 +7,7 @@ typedef struct {
     PyObject *multiply;
     PyObject *divide;
     PyObject *remainder;
+    PyObject *divmod;
     PyObject *power;
     PyObject *square;
     PyObject *reciprocal;
@@ -14,6 +15,7 @@ typedef struct {
     PyObject *sqrt;
     PyObject *cbrt;
     PyObject *negative;
+    PyObject *positive;
     PyObject *absolute;
     PyObject *invert;
     PyObject *left_shift;
@@ -39,13 +41,8 @@ typedef struct {
     PyObject *conjugate;
 } NumericOps;
 
-#ifdef NPY_ENABLE_SEPARATE_COMPILATION
 extern NPY_NO_EXPORT NumericOps n_ops;
 extern NPY_NO_EXPORT PyNumberMethods array_as_number;
-#else
-NPY_NO_EXPORT NumericOps n_ops;
-NPY_NO_EXPORT PyNumberMethods array_as_number;
-#endif
 
 NPY_NO_EXPORT PyObject *
 array_int(PyArrayObject *v);
@@ -69,9 +66,5 @@ PyArray_GenericReduceFunction(PyArrayObject *m1, PyObject *op, int axis,
 NPY_NO_EXPORT PyObject *
 PyArray_GenericAccumulateFunction(PyArrayObject *m1, PyObject *op, int axis,
                                   int rtype, PyArrayObject *out);
-
-NPY_NO_EXPORT int
-needs_right_binop_forward(PyObject *self, PyObject *other,
-                          const char *right_name, int is_inplace);
 
 #endif

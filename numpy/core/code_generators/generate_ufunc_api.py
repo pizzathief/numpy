@@ -11,11 +11,7 @@ from genapi import \
 h_template = r"""
 #ifdef _UMATHMODULE
 
-#ifdef NPY_ENABLE_SEPARATE_COMPILATION
 extern NPY_NO_EXPORT PyTypeObject PyUFunc_Type;
-#else
-NPY_NO_EXPORT PyTypeObject PyUFunc_Type;
-#endif
 
 %s
 
@@ -193,27 +189,22 @@ def do_generate_api(targets, sources):
         module_list.append(api_item.internal_define())
 
     # Write to header
-    fid = open(header_file, 'w')
     s = h_template % ('\n'.join(module_list), '\n'.join(extension_list))
-    fid.write(s)
-    fid.close()
+    genapi.write_file(header_file, s)
 
     # Write to c-code
-    fid = open(c_file, 'w')
     s = c_template % ',\n'.join(init_list)
-    fid.write(s)
-    fid.close()
+    genapi.write_file(c_file, s)
 
     # Write to documentation
-    fid = open(doc_file, 'w')
-    fid.write('''
+    s = '''
 =================
-Numpy Ufunc C-API
+NumPy Ufunc C-API
 =================
-''')
+'''
     for func in ufunc_api_list:
-        fid.write(func.to_ReST())
-        fid.write('\n\n')
-    fid.close()
+        s += func.to_ReST()
+        s += '\n\n'
+    genapi.write_file(doc_file, s)
 
     return targets

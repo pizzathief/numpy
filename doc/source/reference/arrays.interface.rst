@@ -22,7 +22,7 @@ The Array Interface
    described here.
 
 __ http://cython.org/
-__ http://wiki.cython.org/tutorials/numpy
+__ https://github.com/cython/cython/wiki/tutorials-numpy
 
 :version: 3
 
@@ -155,7 +155,7 @@ This approach to the interface consists of the object having an
        dimension. Each entry must be an integer (a Python
        :const:`int` or :const:`long`). As with shape, the values may
        be larger than can be represented by a C "int" or "long"; the
-       calling code should handle this appropiately, either by
+       calling code should handle this appropriately, either by
        raising an error, or by using :c:type:`Py_LONG_LONG` in C. The
        default is :const:`None` which implies a C-style contiguous
        memory buffer.  In this model, the last dimension of the array
@@ -310,7 +310,7 @@ Differences with Array interface (Version 2)
 ============================================
 
 The version 2 interface was very similar.  The differences were
-largely asthetic.  In particular:
+largely aesthetic.  In particular:
 
 1. The PyArrayInterface structure had no descr member at the end
    (and therefore no flag ARR_HAS_DESCR)

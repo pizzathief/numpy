@@ -1,10 +1,12 @@
+.. _c-api.generalized-ufuncs:
+
 ==================================
 Generalized Universal Function API
 ==================================
 
 There is a general need for looping over not only functions on scalars
 but also over functions on vectors (or arrays).
-This concept is realized in Numpy by generalizing the universal functions
+This concept is realized in NumPy by generalizing the universal functions
 (ufuncs).  In regular ufuncs, the elementary function is limited to
 element-by-element operations, whereas the generalized version (gufuncs)
 supports "sub-array" by "sub-array" operations.  The Perl vector library PDL
@@ -60,7 +62,7 @@ output array of the right size. If the size of a core dimension of an output
 cannot be determined from a passed in input or output array, an error will be
 raised.
 
-Note: Prior to Numpy 1.10.0, less strict checks were in place: missing core
+Note: Prior to NumPy 1.10.0, less strict checks were in place: missing core
 dimensions were created by prepending 1's to the shape as necessary, core
 dimensions with the same label were broadcast together, and undetermined
 dimensions were created with size 1.
@@ -99,6 +101,7 @@ Dimension Index
     enumerates the dimension names according to the order of the first
     occurrence of each name in the signature.
 
+.. _details-of-signature:
 
 Details of Signature
 --------------------
@@ -124,9 +127,9 @@ The formal syntax of signatures is as follows::
     <Output arguments>     ::= <Argument list>
     <Argument list>        ::= nil | <Argument> | <Argument> "," <Argument list>
     <Argument>             ::= "(" <Core dimension list> ")"
-    <Core dimension list>  ::= nil | <Dimension name> |
-                               <Dimension name> "," <Core dimension list>
-    <Dimension name>       ::= valid Python variable name
+    <Core dimension list>  ::= nil | <Core dimension name> |
+                               <Core dimension name> "," <Core dimension list>
+    <Core dimension name>  ::= valid Python variable name
 
 
 Notes:

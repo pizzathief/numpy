@@ -6,15 +6,29 @@ from numpy.version import version as __version__
 # disables OpenBLAS affinity setting of the main thread that limits
 # python threads or processes to one core
 import os
-envbak = os.environ.copy()
-if 'OPENBLAS_MAIN_FREE' not in os.environ:
-    os.environ['OPENBLAS_MAIN_FREE'] = '1'
-if 'GOTOBLAS_MAIN_FREE' not in os.environ:
-    os.environ['GOTOBLAS_MAIN_FREE'] = '1'
-from . import multiarray
-os.environ.clear()
-os.environ.update(envbak)
-del envbak
+env_added = []
+for envkey in ['OPENBLAS_MAIN_FREE', 'GOTOBLAS_MAIN_FREE']:
+    if envkey not in os.environ:
+        os.environ[envkey] = '1'
+        env_added.append(envkey)
+
+try:
+    from . import multiarray
+except ImportError as exc:
+    msg = """
+Importing the multiarray numpy extension module failed.  Most
+likely you are trying to import a failed build of numpy.
+If you're working with a numpy git repo, try `git clean -xdf` (removes all
+files not under version control).  Otherwise reinstall numpy.
+
+Original error was: %s
+""" % (exc,)
+    raise ImportError(msg)
+finally:
+    for envkey in env_added:
+        del os.environ[envkey]
+del envkey
+del env_added
 del os
 
 from . import umath
@@ -38,6 +52,8 @@ from . import getlimits
 from .getlimits import *
 from . import shape_base
 from .shape_base import *
+from . import einsumfunc
+from .einsumfunc import *
 del nt
 
 from .fromnumeric import amax as max, amin as min, round_ as round
@@ -52,11 +68,7 @@ __all__ += function_base.__all__
 __all__ += machar.__all__
 __all__ += getlimits.__all__
 __all__ += shape_base.__all__
-
-
-from numpy.testing import Tester
-test = Tester().test
-bench = Tester().bench
+__all__ += einsumfunc.__all__
 
 # Make it possible so that ufuncs can be pickled
 #  Here are the loading and unloading functions
@@ -87,3 +99,7 @@ copyreg.pickle(ufunc, _ufunc_reduce, _ufunc_reconstruct)
 del copyreg
 del sys
 del _ufunc_reduce
+
+from numpy.testing._private.pytesttester import PytestTester
+test = PytestTester(__name__)
+del PytestTester

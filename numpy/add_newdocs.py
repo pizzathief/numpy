@@ -49,7 +49,7 @@ add_newdoc('numpy.core', 'flatiter',
     >>> type(fl)
     <type 'numpy.flatiter'>
     >>> for item in fl:
-    ...     print item
+    ...     print(item)
     ...
     0
     1
@@ -169,6 +169,10 @@ add_newdoc('numpy.core', 'nditer',
             with one per iteration dimension, to be tracked.
           * "common_dtype" causes all the operands to be converted to
             a common data type, with copying or buffering as necessary.
+          * "copy_if_overlap" causes the iterator to determine if read
+            operands have overlap with write operands, and make temporary
+            copies as necessary to avoid overlap. False positives (needless
+            copying) are possible in some cases.
           * "delay_bufalloc" delays allocation of the buffers until
             a reset() call is made. Allows "allocate" operands to
             be initialized before their values are copied into the buffers.
@@ -208,6 +212,9 @@ add_newdoc('numpy.core', 'nditer',
             copies those elements indicated by this mask.
           * 'writemasked' indicates that only elements where the chosen
             'arraymask' operand is True will be written to.
+          * "overlap_assume_elementwise" can be used to mark operands that are
+            accessed only in the iterator order, to allow less conservative
+            copying when "copy_if_overlap" is present.
     op_dtypes : dtype or tuple of dtype(s), optional
         The required data type(s) of the operands. If copying or buffering
         is enabled, the data will be converted to/from their original types.
@@ -250,6 +257,7 @@ add_newdoc('numpy.core', 'nditer',
     dtypes : tuple of dtype(s)
         The data types of the values provided in `value`. This may be
         different from the operand data types if buffering is enabled.
+        Valid only before the iterator is closed.
     finished : bool
         Whether the iteration over the operands is finished or not.
     has_delayed_bufalloc : bool
@@ -262,7 +270,7 @@ add_newdoc('numpy.core', 'nditer',
     has_multi_index : bool
         If True, the iterator was created with the "multi_index" flag,
         and the property `multi_index` can be used to retrieve it.
-    index :
+    index
         When the "c_index" or "f_index" flag was used, this property
         provides access to the index. Raises a ValueError if accessed
         and `has_index` is False.
@@ -273,10 +281,11 @@ add_newdoc('numpy.core', 'nditer',
         An index which matches the order of iteration.
     itersize : int
         Size of the iterator.
-    itviews :
+    itviews
         Structured view(s) of `operands` in memory, matching the reordered
-        and optimized iterator access pattern.
-    multi_index :
+        and optimized iterator access pattern. Valid only before the iterator
+        is closed.
+    multi_index
         When the "multi_index" flag was used, this property
         provides access to the index. Raises a ValueError if accessed
         accessed and `has_multi_index` is False.
@@ -285,10 +294,11 @@ add_newdoc('numpy.core', 'nditer',
     nop : int
         The number of iterator operands.
     operands : tuple of operand(s)
-        The array(s) to be iterated over.
+        The array(s) to be iterated over. Valid only before the iterator is
+        closed.
     shape : tuple of ints
         Shape tuple, the shape of the iterator.
-    value :
+    value
         Value of `operands` at current iteration. Normally, this is a
         tuple of array scalars, but if the flag "external_loop" is used,
         it is a tuple of one dimensional arrays.
@@ -296,7 +306,7 @@ add_newdoc('numpy.core', 'nditer',
     Notes
     -----
     `nditer` supersedes `flatiter`.  The iterator implementation behind
-    `nditer` is also exposed by the Numpy C API.
+    `nditer` is also exposed by the NumPy C API.
 
     The Python exposure supplies two iteration interfaces, one which follows
     the Python iterator protocol, and another which mirrors the C-style
@@ -312,8 +322,9 @@ add_newdoc('numpy.core', 'nditer',
             addop = np.add
             it = np.nditer([x, y, out], [],
                         [['readonly'], ['readonly'], ['writeonly','allocate']])
-            for (a, b, c) in it:
-                addop(a, b, out=c)
+            with it:
+                for (a, b, c) in it:
+                    addop(a, b, out=c)
             return it.operands[2]
 
     Here is the same function, but following the C-style pattern::
@@ -323,12 +334,12 @@ add_newdoc('numpy.core', 'nditer',
 
             it = np.nditer([x, y, out], [],
                         [['readonly'], ['readonly'], ['writeonly','allocate']])
+            with it:
+                while not it.finished:
+                    addop(it[0], it[1], out=it[2])
+                    it.iternext()
 
-            while not it.finished:
-                addop(it[0], it[1], out=it[2])
-                it.iternext()
-
-            return it.operands[2]
+                return it.operands[2]
 
     Here is an example outer product function::
 
@@ -337,14 +348,13 @@ add_newdoc('numpy.core', 'nditer',
 
             it = np.nditer([x, y, out], ['external_loop'],
                     [['readonly'], ['readonly'], ['writeonly', 'allocate']],
-                    op_axes=[range(x.ndim)+[-1]*y.ndim,
-                             [-1]*x.ndim+range(y.ndim),
+                    op_axes=[list(range(x.ndim)) + [-1] * y.ndim,
+                             [-1] * x.ndim + list(range(y.ndim)),
                              None])
-
-            for (a, b, c) in it:
-                mulop(a, b, out=c)
-
-            return it.operands[2]
+            with it:
+                for (a, b, c) in it:
+                    mulop(a, b, out=c)
+                return it.operands[2]
 
         >>> a = np.arange(2)+1
         >>> b = np.arange(3)+1
@@ -367,12 +377,39 @@ add_newdoc('numpy.core', 'nditer',
             while not it.finished:
                 it[0] = lamdaexpr(*it[1:])
                 it.iternext()
-            return it.operands[0]
+                return it.operands[0]
 
         >>> a = np.arange(5)
         >>> b = np.ones(5)
         >>> luf(lambda i,j:i*i + j/2, a, b)
         array([  0.5,   1.5,   4.5,   9.5,  16.5])
+
+    If operand flags `"writeonly"` or `"readwrite"` are used the operands may
+    be views into the original data with the `WRITEBACKIFCOPY` flag. In this case
+    nditer must be used as a context manager or the nditer.close
+    method must be called before using the result. The temporary
+    data will be written back to the original data when the `__exit__`
+    function is called but not before:
+
+        >>> a = np.arange(6, dtype='i4')[::-2]
+        >>> with nditer(a, [],
+        ...        [['writeonly', 'updateifcopy']],
+        ...        casting='unsafe',
+        ...        op_dtypes=[np.dtype('f4')]) as i:
+        ...    x = i.operands[0]
+        ...    x[:] = [-1, -2, -3]
+        ...    # a still unchanged here
+        >>> a, x
+        array([-1, -2, -3]), array([-1, -2, -3])
+
+    It is important to note that once the iterator is exited, dangling
+    references (like `x` in the example) may or may not share data with
+    the original data `a`. If writeback semantics were active, i.e. if
+    `x.base.flags.writebackifcopy` is `True`, then exiting the iterator
+    will sever the connection between `x` and `a`, writing to `x` will
+    no longer write to `a`. If writeback semantics are not active, then
+    `x.data` will still point at some part of `a.data`, and writing to
+    one will affect the other.
 
     """)
 
@@ -395,6 +432,13 @@ add_newdoc('numpy.core', 'nditer', ('copy',
     >>> it2.next()
     (array(1), array(2))
 
+    """))
+
+add_newdoc('numpy.core', 'nditer', ('operands',
+    """
+    operands[`Slice`]
+
+    The array(s) to be iterated over. Valid only before the iterator is closed.
     """))
 
 add_newdoc('numpy.core', 'nditer', ('debug_print',
@@ -456,6 +500,79 @@ add_newdoc('numpy.core', 'nditer', ('reset',
 
     """))
 
+add_newdoc('numpy.core', 'nested_iters',
+    """
+    Create nditers for use in nested loops
+
+    Create a tuple of `nditer` objects which iterate in nested loops over
+    different axes of the op argument. The first iterator is used in the
+    outermost loop, the last in the innermost loop. Advancing one will change
+    the subsequent iterators to point at its new element.
+
+    Parameters
+    ----------
+    op : ndarray or sequence of array_like
+        The array(s) to iterate over.
+
+    axes : list of list of int
+        Each item is used as an "op_axes" argument to an nditer
+
+    flags, op_flags, op_dtypes, order, casting, buffersize (optional)
+        See `nditer` parameters of the same name
+
+    Returns
+    -------
+    iters : tuple of nditer
+        An nditer for each item in `axes`, outermost first
+
+    See Also
+    --------
+    nditer
+
+    Examples
+    --------
+
+    Basic usage. Note how y is the "flattened" version of
+    [a[:, 0, :], a[:, 1, 0], a[:, 2, :]] since we specified
+    the first iter's axes as [1]
+
+    >>> a = np.arange(12).reshape(2, 3, 2)
+    >>> i, j = np.nested_iters(a, [[1], [0, 2]], flags=["multi_index"])
+    >>> for x in i:
+    ...      print(i.multi_index)
+    ...      for y in j:
+    ...          print('', j.multi_index, y)
+
+    (0,)
+     (0, 0) 0
+     (0, 1) 1
+     (1, 0) 6
+     (1, 1) 7
+    (1,)
+     (0, 0) 2
+     (0, 1) 3
+     (1, 0) 8
+     (1, 1) 9
+    (2,)
+     (0, 0) 4
+     (0, 1) 5
+     (1, 0) 10
+     (1, 1) 11
+
+    """)
+
+add_newdoc('numpy.core', 'nditer', ('close',
+    """
+    close()
+
+    Resolve all writeback semantics in writeable operands.
+
+    See Also
+    --------
+
+    :ref:`nditer-context-manager`
+
+    """))
 
 
 ###############################################################################
@@ -481,8 +598,14 @@ add_newdoc('numpy.core', 'broadcast',
         Amongst others, it has ``shape`` and ``nd`` properties, and
         may be used as an iterator.
 
+    See Also
+    --------
+    broadcast_arrays
+    broadcast_to
+
     Examples
     --------
+
     Manually adding two vectors, using broadcasting:
 
     >>> x = np.array([[1], [2], [3]])
@@ -547,9 +670,26 @@ add_newdoc('numpy.core', 'broadcast', ('iters',
 
     """))
 
+add_newdoc('numpy.core', 'broadcast', ('ndim',
+    """
+    Number of dimensions of broadcasted result. Alias for `nd`.
+
+    .. versionadded:: 1.12.0
+
+    Examples
+    --------
+    >>> x = np.array([1, 2, 3])
+    >>> y = np.array([[4], [5], [6]])
+    >>> b = np.broadcast(x, y)
+    >>> b.ndim
+    2
+
+    """))
+
 add_newdoc('numpy.core', 'broadcast', ('nd',
     """
-    Number of dimensions of broadcasted result.
+    Number of dimensions of broadcasted result. For code intended for NumPy
+    1.12.0 and later the more consistent `ndim` is preferred.
 
     Examples
     --------
@@ -642,35 +782,43 @@ add_newdoc('numpy.core', 'broadcast', ('reset',
 
 add_newdoc('numpy.core.multiarray', 'array',
     """
-    array(object, dtype=None, copy=True, order=None, subok=False, ndmin=0)
+    array(object, dtype=None, copy=True, order='K', subok=False, ndmin=0)
 
     Create an array.
 
     Parameters
     ----------
     object : array_like
-        An array, any object exposing the array interface, an
-        object whose __array__ method returns an array, or any
-        (nested) sequence.
+        An array, any object exposing the array interface, an object whose
+        __array__ method returns an array, or any (nested) sequence.
     dtype : data-type, optional
-        The desired data-type for the array.  If not given, then
-        the type will be determined as the minimum type required
-        to hold the objects in the sequence.  This argument can only
-        be used to 'upcast' the array.  For downcasting, use the
-        .astype(t) method.
+        The desired data-type for the array.  If not given, then the type will
+        be determined as the minimum type required to hold the objects in the
+        sequence.  This argument can only be used to 'upcast' the array.  For
+        downcasting, use the .astype(t) method.
     copy : bool, optional
-        If true (default), then the object is copied.  Otherwise, a copy
-        will only be made if __array__ returns a copy, if obj is a
-        nested sequence, or if a copy is needed to satisfy any of the other
-        requirements (`dtype`, `order`, etc.).
-    order : {'C', 'F', 'A'}, optional
-        Specify the order of the array.  If order is 'C', then the array
-        will be in C-contiguous order (last-index varies the fastest).
-        If order is 'F', then the returned array will be in
-        Fortran-contiguous order (first-index varies the fastest).
-        If order is 'A' (default), then the returned array may be
-        in any order (either C-, Fortran-contiguous, or even discontiguous),
-        unless a copy is required, in which case it will be C-contiguous.
+        If true (default), then the object is copied.  Otherwise, a copy will
+        only be made if __array__ returns a copy, if obj is a nested sequence,
+        or if a copy is needed to satisfy any of the other requirements
+        (`dtype`, `order`, etc.).
+    order : {'K', 'A', 'C', 'F'}, optional
+        Specify the memory layout of the array. If object is not an array, the
+        newly created array will be in C order (row major) unless 'F' is
+        specified, in which case it will be in Fortran order (column major).
+        If object is an array the following holds.
+
+        ===== ========= ===================================================
+        order  no copy                     copy=True
+        ===== ========= ===================================================
+        'K'   unchanged F & C order preserved, otherwise most similar order
+        'A'   unchanged F order if input is F and not C, otherwise C order
+        'C'   C order   C order
+        'F'   F order   F order
+        ===== ========= ===================================================
+
+        When ``copy=False`` and a copy is made for other reasons, the result is
+        the same as if ``copy=True``, with some exceptions for `A`, see the
+        Notes section. The default order is 'K'.
     subok : bool, optional
         If True, then sub-classes will be passed-through, otherwise
         the returned array will be forced to be a base-class array (default).
@@ -686,7 +834,21 @@ add_newdoc('numpy.core.multiarray', 'array',
 
     See Also
     --------
-    empty, empty_like, zeros, zeros_like, ones, ones_like, fill
+    empty_like : Return an empty array with shape and type of input.
+    ones_like : Return an array of ones with shape and type of input.
+    zeros_like : Return an array of zeros with shape and type of input.
+    full_like : Return a new array with shape of input filled with value.
+    empty : Return a new uninitialized array.
+    ones : Return a new array setting values to one.
+    zeros : Return a new array setting values to zero.
+    full : Return a new array of given shape filled with value.
+
+
+    Notes
+    -----
+    When order is 'A' and `object` is an array in neither 'C' nor 'F' order,
+    and a copy is forced by a change in dtype, then the order of the result is
+    not necessarily 'C' as expected. This is likely a bug.
 
     Examples
     --------
@@ -741,10 +903,11 @@ add_newdoc('numpy.core.multiarray', 'empty',
     Parameters
     ----------
     shape : int or tuple of int
-        Shape of the empty array
+        Shape of the empty array, e.g., ``(2, 3)`` or ``2``.
     dtype : data-type, optional
-        Desired output data-type.
-    order : {'C', 'F'}, optional
+        Desired output data-type for the array, e.g, `numpy.int8`. Default is
+        `numpy.float64`.
+    order : {'C', 'F'}, optional, default: 'C'
         Whether to store multi-dimensional data in row-major
         (C-style) or column-major (Fortran-style) order in
         memory.
@@ -757,7 +920,11 @@ add_newdoc('numpy.core.multiarray', 'empty',
 
     See Also
     --------
-    empty_like, zeros, ones
+    empty_like : Return an empty array with shape and type of input.
+    ones : Return a new array setting values to one.
+    zeros : Return a new array setting values to zero.
+    full : Return a new array of given shape filled with value.
+
 
     Notes
     -----
@@ -780,24 +947,24 @@ add_newdoc('numpy.core.multiarray', 'empty',
 
 add_newdoc('numpy.core.multiarray', 'empty_like',
     """
-    empty_like(a, dtype=None, order='K', subok=True)
+    empty_like(prototype, dtype=None, order='K', subok=True)
 
     Return a new array with the same shape and type as a given array.
 
     Parameters
     ----------
-    a : array_like
-        The shape and data-type of `a` define these same attributes of the
-        returned array.
+    prototype : array_like
+        The shape and data-type of `prototype` define these same attributes
+        of the returned array.
     dtype : data-type, optional
         Overrides the data type of the result.
 
         .. versionadded:: 1.6.0
     order : {'C', 'F', 'A', or 'K'}, optional
         Overrides the memory layout of the result. 'C' means C-order,
-        'F' means F-order, 'A' means 'F' if ``a`` is Fortran contiguous,
-        'C' otherwise. 'K' means match the layout of ``a`` as closely
-        as possible.
+        'F' means F-order, 'A' means 'F' if ``prototype`` is Fortran
+        contiguous, 'C' otherwise. 'K' means match the layout of ``prototype``
+        as closely as possible.
 
         .. versionadded:: 1.6.0
     subok : bool, optional.
@@ -809,15 +976,14 @@ add_newdoc('numpy.core.multiarray', 'empty_like',
     -------
     out : ndarray
         Array of uninitialized (arbitrary) data with the same
-        shape and type as `a`.
+        shape and type as `prototype`.
 
     See Also
     --------
     ones_like : Return an array of ones with shape and type of input.
     zeros_like : Return an array of zeros with shape and type of input.
+    full_like : Return a new array with shape of input filled with value.
     empty : Return a new uninitialized array.
-    ones : Return a new array setting values to one.
-    zeros : Return a new array setting values to zero.
 
     Notes
     -----
@@ -861,14 +1027,15 @@ add_newdoc('numpy.core.multiarray', 'zeros',
 
     Parameters
     ----------
-    shape : int or sequence of ints
+    shape : int or tuple of ints
         Shape of the new array, e.g., ``(2, 3)`` or ``2``.
     dtype : data-type, optional
         The desired data-type for the array, e.g., `numpy.int8`.  Default is
         `numpy.float64`.
-    order : {'C', 'F'}, optional
-        Whether to store multidimensional data in C- or Fortran-contiguous
-        (row- or column-wise) order in memory.
+    order : {'C', 'F'}, optional, default: 'C'
+        Whether to store multi-dimensional data in row-major
+        (C-style) or column-major (Fortran-style) order in
+        memory.
 
     Returns
     -------
@@ -878,17 +1045,16 @@ add_newdoc('numpy.core.multiarray', 'zeros',
     See Also
     --------
     zeros_like : Return an array of zeros with shape and type of input.
-    ones_like : Return an array of ones with shape and type of input.
-    empty_like : Return an empty array with shape and type of input.
-    ones : Return a new array setting values to one.
     empty : Return a new uninitialized array.
+    ones : Return a new array setting values to one.
+    full : Return a new array of given shape filled with value.
 
     Examples
     --------
     >>> np.zeros(5)
     array([ 0.,  0.,  0.,  0.,  0.])
 
-    >>> np.zeros((5,), dtype=np.int)
+    >>> np.zeros((5,), dtype=int)
     array([0, 0, 0, 0, 0])
 
     >>> np.zeros((2, 1))
@@ -906,34 +1072,6 @@ add_newdoc('numpy.core.multiarray', 'zeros',
 
     """)
 
-add_newdoc('numpy.core.multiarray', 'count_nonzero',
-    """
-    count_nonzero(a)
-
-    Counts the number of non-zero values in the array ``a``.
-
-    Parameters
-    ----------
-    a : array_like
-        The array for which to count non-zeros.
-
-    Returns
-    -------
-    count : int or array of int
-        Number of non-zero values in the array.
-
-    See Also
-    --------
-    nonzero : Return the coordinates of all the non-zero values.
-
-    Examples
-    --------
-    >>> np.count_nonzero(np.eye(4))
-    4
-    >>> np.count_nonzero([[0,1,7,0,0],[3,0,0,2,19]])
-    5
-    """)
-
 add_newdoc('numpy.core.multiarray', 'set_typeDict',
     """set_typeDict(dict)
 
@@ -946,7 +1084,7 @@ add_newdoc('numpy.core.multiarray', 'fromstring',
     """
     fromstring(string, dtype=float, count=-1, sep='')
 
-    A new 1-D array initialized from raw binary or text data in a string.
+    A new 1-D array initialized from text data in a string.
 
     Parameters
     ----------
@@ -960,11 +1098,13 @@ add_newdoc('numpy.core.multiarray', 'fromstring',
         negative (the default), the count will be determined from the
         length of the data.
     sep : str, optional
-        If not provided or, equivalently, the empty string, the data will
-        be interpreted as binary data; otherwise, as ASCII text with
-        decimal numbers.  Also in this latter case, this argument is
-        interpreted as the string separating numbers in the data; extra
-        whitespace between elements is also ignored.
+        The string separating numbers in the data; extra whitespace between
+        elements is also ignored.
+
+        .. deprecated:: 1.14
+            If this argument is not provided, `fromstring` falls back on the
+            behaviour of `frombuffer` after encoding unicode string inputs as
+            either utf-8 (python 3), or the default encoding (python 2).
 
     Returns
     -------
@@ -983,14 +1123,10 @@ add_newdoc('numpy.core.multiarray', 'fromstring',
 
     Examples
     --------
-    >>> np.fromstring('\\x01\\x02', dtype=np.uint8)
-    array([1, 2], dtype=uint8)
     >>> np.fromstring('1 2', dtype=int, sep=' ')
     array([1, 2])
     >>> np.fromstring('1, 2', dtype=int, sep=',')
     array([1, 2])
-    >>> np.fromstring('\\x01\\x02\\x03\\x04\\x05', dtype=np.uint8, count=3)
-    array([1, 2, 3], dtype=uint8)
 
     """)
 
@@ -1023,7 +1159,7 @@ add_newdoc('numpy.core.multiarray', 'fromiter',
     Examples
     --------
     >>> iterable = (x*x for x in range(5))
-    >>> np.fromiter(iterable, np.float)
+    >>> np.fromiter(iterable, float)
     array([  0.,   1.,   4.,   9.,  16.])
 
     """)
@@ -1118,7 +1254,7 @@ add_newdoc('numpy.core.multiarray', 'frombuffer',
     count : int, optional
         Number of items to read. ``-1`` means all data in the buffer.
     offset : int, optional
-        Start reading the buffer from this offset; default: 0.
+        Start reading the buffer from this offset (in bytes); default: 0.
 
     Notes
     -----
@@ -1139,11 +1275,16 @@ add_newdoc('numpy.core.multiarray', 'frombuffer',
     array(['w', 'o', 'r', 'l', 'd'],
           dtype='|S1')
 
+    >>> np.frombuffer(b'\\x01\\x02', dtype=np.uint8)
+    array([1, 2], dtype=uint8)
+    >>> np.frombuffer(b'\\x01\\x02\\x03\\x04\\x05', dtype=np.uint8, count=3)
+    array([1, 2, 3], dtype=uint8)
+
     """)
 
 add_newdoc('numpy.core.multiarray', 'concatenate',
     """
-    concatenate((a1, a2, ...), axis=0)
+    concatenate((a1, a2, ...), axis=0, out=None)
 
     Join a sequence of arrays along an existing axis.
 
@@ -1153,7 +1294,12 @@ add_newdoc('numpy.core.multiarray', 'concatenate',
         The arrays must have the same shape, except in the dimension
         corresponding to `axis` (the first, by default).
     axis : int, optional
-        The axis along which the arrays will be joined.  Default is 0.
+        The axis along which the arrays will be joined.  If axis is None,
+        arrays are flattened before use.  Default is 0.
+    out : ndarray, optional
+        If provided, the destination to place the result. The shape must be
+        correct, matching that of what concatenate would have returned if no
+        out argument were specified.
 
     Returns
     -------
@@ -1193,6 +1339,8 @@ add_newdoc('numpy.core.multiarray', 'concatenate',
     >>> np.concatenate((a, b.T), axis=1)
     array([[1, 2, 5],
            [3, 4, 6]])
+    >>> np.concatenate((a, b), axis=None)
+    array([1, 2, 3, 4, 5, 6])
 
     This function will not preserve masking of MaskedArray inputs.
 
@@ -1228,7 +1376,7 @@ add_newdoc('numpy.core', 'inner',
     Parameters
     ----------
     a, b : array_like
-        If `a` and `b` are nonscalar, their last dimensions of must match.
+        If `a` and `b` are nonscalar, their last dimensions must match.
 
     Returns
     -------
@@ -1305,7 +1453,7 @@ add_newdoc('numpy.core.multiarray', 'arange',
     Values are generated within the half-open interval ``[start, stop)``
     (in other words, the interval including `start` but excluding `stop`).
     For integer arguments the function is equivalent to the Python built-in
-    `range <http://docs.python.org/lib/built-in-funcs.html>`_ function,
+    `range <https://docs.python.org/library/functions.html#func-range>`_ function,
     but returns an ndarray rather than a list.
 
     When using a non-integer step, such as 0.1, the results will often not
@@ -1323,7 +1471,8 @@ add_newdoc('numpy.core.multiarray', 'arange',
     step : number, optional
         Spacing between values.  For any output `out`, this is the distance
         between two adjacent values, ``out[i+1] - out[i]``.  The default
-        step size is 1.  If `step` is specified, `start` must also be given.
+        step size is 1.  If `step` is specified as a position argument,
+        `start` must also be given.
     dtype : dtype
         The type of the output array.  If `dtype` is not given, infer the data
         type from the other input arguments.
@@ -1437,8 +1586,8 @@ add_newdoc('numpy.core.multiarray', 'where',
     condition : array_like, bool
         When True, yield `x`, otherwise yield `y`.
     x, y : array_like, optional
-        Values from which to choose. `x` and `y` need to have the same
-        shape as `condition`.
+        Values from which to choose. `x`, `y` and `condition` need to be
+        broadcastable to some shape.
 
     Returns
     -------
@@ -1485,11 +1634,11 @@ add_newdoc('numpy.core.multiarray', 'where',
     Find the indices of elements of `x` that are in `goodvalues`.
 
     >>> goodvalues = [3, 4, 7]
-    >>> ix = np.in1d(x.ravel(), goodvalues).reshape(x.shape)
+    >>> ix = np.isin(x, goodvalues)
     >>> ix
     array([[False, False, False],
            [ True,  True, False],
-           [False,  True, False]], dtype=bool)
+           [False,  True, False]])
     >>> np.where(ix)
     (array([1, 1, 2]), array([0, 1, 1]))
 
@@ -1500,7 +1649,7 @@ add_newdoc('numpy.core.multiarray', 'lexsort',
     """
     lexsort(keys, axis=-1)
 
-    Perform an indirect sort using a sequence of keys.
+    Perform an indirect stable sort using a sequence of keys.
 
     Given multiple sorting keys, which can be interpreted as columns in a
     spreadsheet, lexsort returns an array of integer indices that describes
@@ -1548,7 +1697,7 @@ add_newdoc('numpy.core.multiarray', 'lexsort',
     >>> a = [1,5,1,4,3,4,4] # First column
     >>> b = [9,4,0,4,0,2,1] # Second column
     >>> ind = np.lexsort((b,a)) # Sort by a, then by b
-    >>> print ind
+    >>> print(ind)
     [2 0 4 6 5 3 1]
 
     >>> [(a[i],b[i]) for i in ind]
@@ -1574,7 +1723,7 @@ add_newdoc('numpy.core.multiarray', 'lexsort',
 
 add_newdoc('numpy.core.multiarray', 'can_cast',
     """
-    can_cast(from, totype, casting = 'safe')
+    can_cast(from_, to, casting='safe')
 
     Returns True if cast between data types can occur according to the
     casting rule.  If from is a scalar or array scalar, also returns
@@ -1583,9 +1732,9 @@ add_newdoc('numpy.core.multiarray', 'can_cast',
 
     Parameters
     ----------
-    from : dtype, dtype specifier, scalar, or array
+    from_ : dtype, dtype specifier, scalar, or array
         Data type, scalar, or array to cast from.
-    totype : dtype or dtype specifier
+    to : dtype or dtype specifier
         Data type to cast to.
     casting : {'no', 'equiv', 'safe', 'same_kind', 'unsafe'}, optional
         Controls what kind of data casting may occur.
@@ -1620,9 +1769,9 @@ add_newdoc('numpy.core.multiarray', 'can_cast',
 
     >>> np.can_cast(np.int32, np.int64)
     True
-    >>> np.can_cast(np.float64, np.complex)
+    >>> np.can_cast(np.float64, complex)
     True
-    >>> np.can_cast(np.complex, np.float)
+    >>> np.can_cast(complex, float)
     False
 
     >>> np.can_cast('i8', 'f8')
@@ -1688,7 +1837,7 @@ add_newdoc('numpy.core.multiarray', 'promote_types',
     kind to which both ``type1`` and ``type2`` may be safely cast.
     The returned data type is always in native byte order.
 
-    This function is symmetric and associative.
+    This function is symmetric, but rarely associative.
 
     Parameters
     ----------
@@ -1729,6 +1878,14 @@ add_newdoc('numpy.core.multiarray', 'promote_types',
 
     >>> np.promote_types('i4', 'S8')
     dtype('S11')
+
+    An example of a non-associative case:
+
+    >>> p = np.promote_types
+    >>> p('S', p('i1', 'u1'))
+    dtype('S6')
+    >>> p(p('S', 'i1'), 'u1')
+    dtype('S4')
 
     """)
 
@@ -1905,12 +2062,22 @@ add_newdoc('numpy.core', 'dot',
     """
     dot(a, b, out=None)
 
-    Dot product of two arrays.
+    Dot product of two arrays. Specifically,
 
-    For 2-D arrays it is equivalent to matrix multiplication, and for 1-D
-    arrays to inner product of vectors (without complex conjugation). For
-    N dimensions it is a sum product over the last axis of `a` and
-    the second-to-last of `b`::
+    - If both `a` and `b` are 1-D arrays, it is inner product of vectors
+      (without complex conjugation).
+
+    - If both `a` and `b` are 2-D arrays, it is matrix multiplication,
+      but using :func:`matmul` or ``a @ b`` is preferred.
+
+    - If either `a` or `b` is 0-D (scalar), it is equivalent to :func:`multiply`
+      and using ``numpy.multiply(a, b)`` or ``a * b`` is preferred.
+
+    - If `a` is an N-D array and `b` is a 1-D array, it is a sum product over
+      the last axis of `a` and `b`.
+
+    - If `a` is an N-D array and `b` is an M-D array (where ``M>=2``), it is a
+      sum product over the last axis of `a` and the second-to-last axis of `b`::
 
         dot(a, b)[i,j,k,m] = sum(a[i,j,:] * b[k,:,m])
 
@@ -2006,7 +2173,7 @@ add_newdoc('numpy.core', 'matmul',
       were elements.
 
     .. warning::
-       This function is preliminary and included in Numpy 1.10 for testing
+       This function is preliminary and included in NumPy 1.10.0 for testing
        and documentation. Its semantics will not change, but the number and
        order of the optional arguments will.
 
@@ -2099,227 +2266,6 @@ add_newdoc('numpy.core', 'matmul',
 
     """)
 
-
-add_newdoc('numpy.core', 'einsum',
-    """
-    einsum(subscripts, *operands, out=None, dtype=None, order='K', casting='safe')
-
-    Evaluates the Einstein summation convention on the operands.
-
-    Using the Einstein summation convention, many common multi-dimensional
-    array operations can be represented in a simple fashion.  This function
-    provides a way to compute such summations. The best way to understand this
-    function is to try the examples below, which show how many common NumPy
-    functions can be implemented as calls to `einsum`.
-
-    Parameters
-    ----------
-    subscripts : str
-        Specifies the subscripts for summation.
-    operands : list of array_like
-        These are the arrays for the operation.
-    out : ndarray, optional
-        If provided, the calculation is done into this array.
-    dtype : data-type, optional
-        If provided, forces the calculation to use the data type specified.
-        Note that you may have to also give a more liberal `casting`
-        parameter to allow the conversions.
-    order : {'C', 'F', 'A', 'K'}, optional
-        Controls the memory layout of the output. 'C' means it should
-        be C contiguous. 'F' means it should be Fortran contiguous,
-        'A' means it should be 'F' if the inputs are all 'F', 'C' otherwise.
-        'K' means it should be as close to the layout as the inputs as
-        is possible, including arbitrarily permuted axes.
-        Default is 'K'.
-    casting : {'no', 'equiv', 'safe', 'same_kind', 'unsafe'}, optional
-        Controls what kind of data casting may occur.  Setting this to
-        'unsafe' is not recommended, as it can adversely affect accumulations.
-
-          * 'no' means the data types should not be cast at all.
-          * 'equiv' means only byte-order changes are allowed.
-          * 'safe' means only casts which can preserve values are allowed.
-          * 'same_kind' means only safe casts or casts within a kind,
-            like float64 to float32, are allowed.
-          * 'unsafe' means any data conversions may be done.
-
-    Returns
-    -------
-    output : ndarray
-        The calculation based on the Einstein summation convention.
-
-    See Also
-    --------
-    dot, inner, outer, tensordot
-
-    Notes
-    -----
-    .. versionadded:: 1.6.0
-
-    The subscripts string is a comma-separated list of subscript labels,
-    where each label refers to a dimension of the corresponding operand.
-    Repeated subscripts labels in one operand take the diagonal.  For example,
-    ``np.einsum('ii', a)`` is equivalent to ``np.trace(a)``.
-
-    Whenever a label is repeated, it is summed, so ``np.einsum('i,i', a, b)``
-    is equivalent to ``np.inner(a,b)``.  If a label appears only once,
-    it is not summed, so ``np.einsum('i', a)`` produces a view of ``a``
-    with no changes.
-
-    The order of labels in the output is by default alphabetical.  This
-    means that ``np.einsum('ij', a)`` doesn't affect a 2D array, while
-    ``np.einsum('ji', a)`` takes its transpose.
-
-    The output can be controlled by specifying output subscript labels
-    as well.  This specifies the label order, and allows summing to
-    be disallowed or forced when desired.  The call ``np.einsum('i->', a)``
-    is like ``np.sum(a, axis=-1)``, and ``np.einsum('ii->i', a)``
-    is like ``np.diag(a)``.  The difference is that `einsum` does not
-    allow broadcasting by default.
-
-    To enable and control broadcasting, use an ellipsis.  Default
-    NumPy-style broadcasting is done by adding an ellipsis
-    to the left of each term, like ``np.einsum('...ii->...i', a)``.
-    To take the trace along the first and last axes,
-    you can do ``np.einsum('i...i', a)``, or to do a matrix-matrix
-    product with the left-most indices instead of rightmost, you can do
-    ``np.einsum('ij...,jk...->ik...', a, b)``.
-
-    When there is only one operand, no axes are summed, and no output
-    parameter is provided, a view into the operand is returned instead
-    of a new array.  Thus, taking the diagonal as ``np.einsum('ii->i', a)``
-    produces a view.
-
-    An alternative way to provide the subscripts and operands is as
-    ``einsum(op0, sublist0, op1, sublist1, ..., [sublistout])``. The examples
-    below have corresponding `einsum` calls with the two parameter methods.
-
-    .. versionadded:: 1.10.0
-
-    Views returned from einsum are now writeable whenever the input array
-    is writeable. For example, ``np.einsum('ijk...->kji...', a)`` will now
-    have the same effect as ``np.swapaxes(a, 0, 2)`` and
-    ``np.einsum('ii->i', a)`` will return a writeable view of the diagonal
-    of a 2D array.
-
-    Examples
-    --------
-    >>> a = np.arange(25).reshape(5,5)
-    >>> b = np.arange(5)
-    >>> c = np.arange(6).reshape(2,3)
-
-    >>> np.einsum('ii', a)
-    60
-    >>> np.einsum(a, [0,0])
-    60
-    >>> np.trace(a)
-    60
-
-    >>> np.einsum('ii->i', a)
-    array([ 0,  6, 12, 18, 24])
-    >>> np.einsum(a, [0,0], [0])
-    array([ 0,  6, 12, 18, 24])
-    >>> np.diag(a)
-    array([ 0,  6, 12, 18, 24])
-
-    >>> np.einsum('ij,j', a, b)
-    array([ 30,  80, 130, 180, 230])
-    >>> np.einsum(a, [0,1], b, [1])
-    array([ 30,  80, 130, 180, 230])
-    >>> np.dot(a, b)
-    array([ 30,  80, 130, 180, 230])
-    >>> np.einsum('...j,j', a, b)
-    array([ 30,  80, 130, 180, 230])
-
-    >>> np.einsum('ji', c)
-    array([[0, 3],
-           [1, 4],
-           [2, 5]])
-    >>> np.einsum(c, [1,0])
-    array([[0, 3],
-           [1, 4],
-           [2, 5]])
-    >>> c.T
-    array([[0, 3],
-           [1, 4],
-           [2, 5]])
-
-    >>> np.einsum('..., ...', 3, c)
-    array([[ 0,  3,  6],
-           [ 9, 12, 15]])
-    >>> np.einsum(3, [Ellipsis], c, [Ellipsis])
-    array([[ 0,  3,  6],
-           [ 9, 12, 15]])
-    >>> np.multiply(3, c)
-    array([[ 0,  3,  6],
-           [ 9, 12, 15]])
-
-    >>> np.einsum('i,i', b, b)
-    30
-    >>> np.einsum(b, [0], b, [0])
-    30
-    >>> np.inner(b,b)
-    30
-
-    >>> np.einsum('i,j', np.arange(2)+1, b)
-    array([[0, 1, 2, 3, 4],
-           [0, 2, 4, 6, 8]])
-    >>> np.einsum(np.arange(2)+1, [0], b, [1])
-    array([[0, 1, 2, 3, 4],
-           [0, 2, 4, 6, 8]])
-    >>> np.outer(np.arange(2)+1, b)
-    array([[0, 1, 2, 3, 4],
-           [0, 2, 4, 6, 8]])
-
-    >>> np.einsum('i...->...', a)
-    array([50, 55, 60, 65, 70])
-    >>> np.einsum(a, [0,Ellipsis], [Ellipsis])
-    array([50, 55, 60, 65, 70])
-    >>> np.sum(a, axis=0)
-    array([50, 55, 60, 65, 70])
-
-    >>> a = np.arange(60.).reshape(3,4,5)
-    >>> b = np.arange(24.).reshape(4,3,2)
-    >>> np.einsum('ijk,jil->kl', a, b)
-    array([[ 4400.,  4730.],
-           [ 4532.,  4874.],
-           [ 4664.,  5018.],
-           [ 4796.,  5162.],
-           [ 4928.,  5306.]])
-    >>> np.einsum(a, [0,1,2], b, [1,0,3], [2,3])
-    array([[ 4400.,  4730.],
-           [ 4532.,  4874.],
-           [ 4664.,  5018.],
-           [ 4796.,  5162.],
-           [ 4928.,  5306.]])
-    >>> np.tensordot(a,b, axes=([1,0],[0,1]))
-    array([[ 4400.,  4730.],
-           [ 4532.,  4874.],
-           [ 4664.,  5018.],
-           [ 4796.,  5162.],
-           [ 4928.,  5306.]])
-
-    >>> a = np.arange(6).reshape((3,2))
-    >>> b = np.arange(12).reshape((4,3))
-    >>> np.einsum('ki,jk->ij', a, b)
-    array([[10, 28, 46, 64],
-           [13, 40, 67, 94]])
-    >>> np.einsum('ki,...k->i...', a, b)
-    array([[10, 28, 46, 64],
-           [13, 40, 67, 94]])
-    >>> np.einsum('k...,jk', a, b)
-    array([[10, 28, 46, 64],
-           [13, 40, 67, 94]])
-
-    >>> # since version 1.10.0
-    >>> a = np.zeros((3, 3))
-    >>> np.einsum('ii->i', a)[:] = 1
-    >>> a
-    array([[ 1.,  0.,  0.],
-           [ 0.,  1.,  0.],
-           [ 0.,  0.,  1.]])
-
-    """)
-
 add_newdoc('numpy.core', 'vdot',
     """
     vdot(a, b)
@@ -2375,6 +2321,310 @@ add_newdoc('numpy.core', 'vdot',
 
     """)
 
+add_newdoc('numpy.core.multiarray', 'c_einsum',
+    """
+    c_einsum(subscripts, *operands, out=None, dtype=None, order='K',
+           casting='safe')
+           
+    *This documentation shadows that of the native python implementation of the `einsum` function,
+    except all references and examples related to the `optimize` argument (v 0.12.0) have been removed.*
+
+    Evaluates the Einstein summation convention on the operands.
+
+    Using the Einstein summation convention, many common multi-dimensional,
+    linear algebraic array operations can be represented in a simple fashion.
+    In *implicit* mode `einsum` computes these values.
+
+    In *explicit* mode, `einsum` provides further flexibility to compute
+    other array operations that might not be considered classical Einstein
+    summation operations, by disabling, or forcing summation over specified
+    subscript labels.
+
+    See the notes and examples for clarification.
+
+    Parameters
+    ----------
+    subscripts : str
+        Specifies the subscripts for summation as comma separated list of
+        subscript labels. An implicit (classical Einstein summation)
+        calculation is performed unless the explicit indicator '->' is
+        included as well as subscript labels of the precise output form.
+    operands : list of array_like
+        These are the arrays for the operation.
+    out : ndarray, optional
+        If provided, the calculation is done into this array.
+    dtype : {data-type, None}, optional
+        If provided, forces the calculation to use the data type specified.
+        Note that you may have to also give a more liberal `casting`
+        parameter to allow the conversions. Default is None.
+    order : {'C', 'F', 'A', 'K'}, optional
+        Controls the memory layout of the output. 'C' means it should
+        be C contiguous. 'F' means it should be Fortran contiguous,
+        'A' means it should be 'F' if the inputs are all 'F', 'C' otherwise.
+        'K' means it should be as close to the layout as the inputs as
+        is possible, including arbitrarily permuted axes.
+        Default is 'K'.
+    casting : {'no', 'equiv', 'safe', 'same_kind', 'unsafe'}, optional
+        Controls what kind of data casting may occur.  Setting this to
+        'unsafe' is not recommended, as it can adversely affect accumulations.
+
+          * 'no' means the data types should not be cast at all.
+          * 'equiv' means only byte-order changes are allowed.
+          * 'safe' means only casts which can preserve values are allowed.
+          * 'same_kind' means only safe casts or casts within a kind,
+            like float64 to float32, are allowed.
+          * 'unsafe' means any data conversions may be done.
+
+        Default is 'safe'.
+    optimize : {False, True, 'greedy', 'optimal'}, optional
+        Controls if intermediate optimization should occur. No optimization
+        will occur if False and True will default to the 'greedy' algorithm.
+        Also accepts an explicit contraction list from the ``np.einsum_path``
+        function. See ``np.einsum_path`` for more details. Defaults to False.
+
+    Returns
+    -------
+    output : ndarray
+        The calculation based on the Einstein summation convention.
+
+    See Also
+    --------
+    einsum_path, dot, inner, outer, tensordot, linalg.multi_dot
+
+    Notes
+    -----
+    .. versionadded:: 1.6.0
+
+    The Einstein summation convention can be used to compute
+    many multi-dimensional, linear algebraic array operations. `einsum`
+    provides a succinct way of representing these.
+
+    A non-exhaustive list of these operations,
+    which can be computed by `einsum`, is shown below along with examples:
+
+    * Trace of an array, :py:func:`numpy.trace`.
+    * Return a diagonal, :py:func:`numpy.diag`.
+    * Array axis summations, :py:func:`numpy.sum`.
+    * Transpositions and permutations, :py:func:`numpy.transpose`.
+    * Matrix multiplication and dot product, :py:func:`numpy.matmul` :py:func:`numpy.dot`.
+    * Vector inner and outer products, :py:func:`numpy.inner` :py:func:`numpy.outer`.
+    * Broadcasting, element-wise and scalar multiplication, :py:func:`numpy.multiply`.
+    * Tensor contractions, :py:func:`numpy.tensordot`.
+    * Chained array operations, in efficient calculation order, :py:func:`numpy.einsum_path`.
+
+    The subscripts string is a comma-separated list of subscript labels,
+    where each label refers to a dimension of the corresponding operand.
+    Whenever a label is repeated it is summed, so ``np.einsum('i,i', a, b)``
+    is equivalent to :py:func:`np.inner(a,b) <numpy.inner>`. If a label
+    appears only once, it is not summed, so ``np.einsum('i', a)`` produces a
+    view of ``a`` with no changes. A further example ``np.einsum('ij,jk', a, b)``
+    describes traditional matrix multiplication and is equivalent to
+    :py:func:`np.matmul(a,b) <numpy.matmul>`. Repeated subscript labels in one
+    operand take the diagonal. For example, ``np.einsum('ii', a)`` is equivalent
+    to :py:func:`np.trace(a) <numpy.trace>`.
+
+    In *implicit mode*, the chosen subscripts are important
+    since the axes of the output are reordered alphabetically.  This
+    means that ``np.einsum('ij', a)`` doesn't affect a 2D array, while
+    ``np.einsum('ji', a)`` takes its transpose. Additionally,
+    ``np.einsum('ij,jk', a, b)`` returns a matrix multiplication, while,
+    ``np.einsum('ij,jh', a, b)`` returns the transpose of the
+    multiplication since subscript 'h' precedes subscript 'i'.
+
+    In *explicit mode* the output can be directly controlled by
+    specifying output subscript labels.  This requires the
+    identifier '->' as well as the list of output subscript labels.
+    This feature increases the flexibility of the function since
+    summing can be disabled or forced when required. The call
+    ``np.einsum('i->', a)`` is like :py:func:`np.sum(a, axis=-1) <numpy.sum>`,
+    and ``np.einsum('ii->i', a)`` is like :py:func:`np.diag(a) <numpy.diag>`.
+    The difference is that `einsum` does not allow broadcasting by default.
+    Additionally ``np.einsum('ij,jh->ih', a, b)`` directly specifies the
+    order of the output subscript labels and therefore returns matrix
+    multiplication, unlike the example above in implicit mode.
+
+    To enable and control broadcasting, use an ellipsis.  Default
+    NumPy-style broadcasting is done by adding an ellipsis
+    to the left of each term, like ``np.einsum('...ii->...i', a)``.
+    To take the trace along the first and last axes,
+    you can do ``np.einsum('i...i', a)``, or to do a matrix-matrix
+    product with the left-most indices instead of rightmost, one can do
+    ``np.einsum('ij...,jk...->ik...', a, b)``.
+
+    When there is only one operand, no axes are summed, and no output
+    parameter is provided, a view into the operand is returned instead
+    of a new array.  Thus, taking the diagonal as ``np.einsum('ii->i', a)``
+    produces a view (changed in version 1.10.0).
+
+    `einsum` also provides an alternative way to provide the subscripts
+    and operands as ``einsum(op0, sublist0, op1, sublist1, ..., [sublistout])``.
+    If the output shape is not provided in this format `einsum` will be
+    calculated in implicit mode, otherwise it will be performed explicitly.
+    The examples below have corresponding `einsum` calls with the two
+    parameter methods.
+
+    .. versionadded:: 1.10.0
+
+    Views returned from einsum are now writeable whenever the input array
+    is writeable. For example, ``np.einsum('ijk...->kji...', a)`` will now
+    have the same effect as :py:func:`np.swapaxes(a, 0, 2) <numpy.swapaxes>`
+    and ``np.einsum('ii->i', a)`` will return a writeable view of the diagonal
+    of a 2D array.
+
+    Examples
+    --------
+    >>> a = np.arange(25).reshape(5,5)
+    >>> b = np.arange(5)
+    >>> c = np.arange(6).reshape(2,3)
+
+    Trace of a matrix:
+
+    >>> np.einsum('ii', a)
+    60
+    >>> np.einsum(a, [0,0])
+    60
+    >>> np.trace(a)
+    60
+
+    Extract the diagonal (requires explicit form):
+
+    >>> np.einsum('ii->i', a)
+    array([ 0,  6, 12, 18, 24])
+    >>> np.einsum(a, [0,0], [0])
+    array([ 0,  6, 12, 18, 24])
+    >>> np.diag(a)
+    array([ 0,  6, 12, 18, 24])
+
+    Sum over an axis (requires explicit form):
+
+    >>> np.einsum('ij->i', a)
+    array([ 10,  35,  60,  85, 110])
+    >>> np.einsum(a, [0,1], [0])
+    array([ 10,  35,  60,  85, 110])
+    >>> np.sum(a, axis=1)
+    array([ 10,  35,  60,  85, 110])
+
+    For higher dimensional arrays summing a single axis can be done with ellipsis:
+
+    >>> np.einsum('...j->...', a)
+    array([ 10,  35,  60,  85, 110])
+    >>> np.einsum(a, [Ellipsis,1], [Ellipsis])
+    array([ 10,  35,  60,  85, 110])
+
+    Compute a matrix transpose, or reorder any number of axes:
+
+    >>> np.einsum('ji', c)
+    array([[0, 3],
+           [1, 4],
+           [2, 5]])
+    >>> np.einsum('ij->ji', c)
+    array([[0, 3],
+           [1, 4],
+           [2, 5]])
+    >>> np.einsum(c, [1,0])
+    array([[0, 3],
+           [1, 4],
+           [2, 5]])
+    >>> np.transpose(c)
+    array([[0, 3],
+           [1, 4],
+           [2, 5]])
+
+    Vector inner products:
+
+    >>> np.einsum('i,i', b, b)
+    30
+    >>> np.einsum(b, [0], b, [0])
+    30
+    >>> np.inner(b,b)
+    30
+
+    Matrix vector multiplication:
+
+    >>> np.einsum('ij,j', a, b)
+    array([ 30,  80, 130, 180, 230])
+    >>> np.einsum(a, [0,1], b, [1])
+    array([ 30,  80, 130, 180, 230])
+    >>> np.dot(a, b)
+    array([ 30,  80, 130, 180, 230])
+    >>> np.einsum('...j,j', a, b)
+    array([ 30,  80, 130, 180, 230])
+
+    Broadcasting and scalar multiplication:
+
+    >>> np.einsum('..., ...', 3, c)
+    array([[ 0,  3,  6],
+           [ 9, 12, 15]])
+    >>> np.einsum(',ij', 3, c)
+    array([[ 0,  3,  6],
+           [ 9, 12, 15]])
+    >>> np.einsum(3, [Ellipsis], c, [Ellipsis])
+    array([[ 0,  3,  6],
+           [ 9, 12, 15]])
+    >>> np.multiply(3, c)
+    array([[ 0,  3,  6],
+           [ 9, 12, 15]])
+
+    Vector outer product:
+
+    >>> np.einsum('i,j', np.arange(2)+1, b)
+    array([[0, 1, 2, 3, 4],
+           [0, 2, 4, 6, 8]])
+    >>> np.einsum(np.arange(2)+1, [0], b, [1])
+    array([[0, 1, 2, 3, 4],
+           [0, 2, 4, 6, 8]])
+    >>> np.outer(np.arange(2)+1, b)
+    array([[0, 1, 2, 3, 4],
+           [0, 2, 4, 6, 8]])
+
+    Tensor contraction:
+
+    >>> a = np.arange(60.).reshape(3,4,5)
+    >>> b = np.arange(24.).reshape(4,3,2)
+    >>> np.einsum('ijk,jil->kl', a, b)
+    array([[ 4400.,  4730.],
+           [ 4532.,  4874.],
+           [ 4664.,  5018.],
+           [ 4796.,  5162.],
+           [ 4928.,  5306.]])
+    >>> np.einsum(a, [0,1,2], b, [1,0,3], [2,3])
+    array([[ 4400.,  4730.],
+           [ 4532.,  4874.],
+           [ 4664.,  5018.],
+           [ 4796.,  5162.],
+           [ 4928.,  5306.]])
+    >>> np.tensordot(a,b, axes=([1,0],[0,1]))
+    array([[ 4400.,  4730.],
+           [ 4532.,  4874.],
+           [ 4664.,  5018.],
+           [ 4796.,  5162.],
+           [ 4928.,  5306.]])
+
+    Writeable returned arrays (since version 1.10.0):
+
+    >>> a = np.zeros((3, 3))
+    >>> np.einsum('ii->i', a)[:] = 1
+    >>> a
+    array([[ 1.,  0.,  0.],
+           [ 0.,  1.,  0.],
+           [ 0.,  0.,  1.]])
+
+    Example of ellipsis use:
+
+    >>> a = np.arange(6).reshape((3,2))
+    >>> b = np.arange(12).reshape((4,3))
+    >>> np.einsum('ki,jk->ij', a, b)
+    array([[10, 28, 46, 64],
+           [13, 40, 67, 94]])
+    >>> np.einsum('ki,...k->i...', a, b)
+    array([[10, 28, 46, 64],
+           [13, 40, 67, 94]])
+    >>> np.einsum('k...,jk', a, b)
+    array([[10, 28, 46, 64],
+           [13, 40, 67, 94]])
+
+    """)
+
 
 ##############################################################################
 #
@@ -2406,7 +2656,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray',
     a low-level method (`ndarray(...)`) for instantiating an array.
 
     For more information, refer to the `numpy` module and examine the
-    the methods and attributes of an array.
+    methods and attributes of an array.
 
     Parameters
     ----------
@@ -2755,8 +3005,13 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('flags',
         array raises a RuntimeError exception.
     ALIGNED (A)
         The data and all elements are aligned appropriately for the hardware.
+    WRITEBACKIFCOPY (X)
+        This array is a copy of some other array. The C-API function
+        PyArray_ResolveWritebackIfCopy must be called before deallocating
+        to the base array will be updated with the contents of this array.
     UPDATEIFCOPY (U)
-        This array is a copy of some other array. When this array is
+        (Deprecated, use WRITEBACKIFCOPY) This array is a copy of some other array.
+        When this array is
         deallocated, the base array will be updated with the contents of
         this array.
     FNC
@@ -2776,13 +3031,14 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('flags',
     or by using lowercased attribute names (as in ``a.flags.writeable``). Short flag
     names are only supported in dictionary access.
 
-    Only the UPDATEIFCOPY, WRITEABLE, and ALIGNED flags can be changed by
-    the user, via direct assignment to the attribute or dictionary entry,
-    or by calling `ndarray.setflags`.
+    Only the WRITEBACKIFCOPY, UPDATEIFCOPY, WRITEABLE, and ALIGNED flags can be
+    changed by the user, via direct assignment to the attribute or dictionary
+    entry, or by calling `ndarray.setflags`.
 
     The array flags cannot be set arbitrarily:
 
     - UPDATEIFCOPY can only be set ``False``.
+    - WRITEBACKIFCOPY can only be set ``False``.
     - ALIGNED can only be set ``True`` if the data is truly aligned.
     - WRITEABLE can only be set ``True`` if the array owns its own memory
       or the ultimate owner of the memory exposes a writeable buffer
@@ -2902,10 +3158,12 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('shape',
     """
     Tuple of array dimensions.
 
-    Notes
-    -----
-    May be used to "reshape" the array, as long as this would not
-    require a change in the total number of elements
+    The shape property is usually used to get the current shape of an array,
+    but may also be used to reshape the array in-place by assigning a tuple of
+    array dimensions to it.  As with `numpy.reshape`, one of the new shape
+    dimensions can be -1, in which case its value is inferred from the size of
+    the array and the remaining dimensions. Reshaping an array in-place will
+    fail if a copy is required.
 
     Examples
     --------
@@ -2924,6 +3182,15 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('shape',
     Traceback (most recent call last):
       File "<stdin>", line 1, in <module>
     ValueError: total size of new array must be unchanged
+    >>> np.zeros((4,2))[::2].shape = (-1,)
+    Traceback (most recent call last):
+      File "<stdin>", line 1, in <module>
+    AttributeError: incompatible shape for a non-contiguous array
+
+    See Also
+    --------
+    numpy.reshape : similar function
+    ndarray.reshape : similar method
 
     """))
 
@@ -2932,8 +3199,16 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('size',
     """
     Number of elements in the array.
 
-    Equivalent to ``np.prod(a.shape)``, i.e., the product of the array's
+    Equal to ``np.prod(a.shape)``, i.e., the product of the array's
     dimensions.
+
+    Notes
+    -----
+    `a.size` returns a standard arbitrary precision Python integer. This 
+    may not be the case with other methods of obtaining the same value
+    (like the suggested ``np.prod(a.shape)``, which returns an instance
+    of ``np.int_``), and may be relevant if the value is used further in
+    calculations that may overflow a fixed size integer type.
 
     Examples
     --------
@@ -3061,25 +3336,19 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('__array_wrap__',
 
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('__copy__',
-    """a.__copy__([order])
+    """a.__copy__()
 
-    Return a copy of the array.
+    Used if :func:`copy.copy` is called on an array. Returns a copy of the array.
 
-    Parameters
-    ----------
-    order : {'C', 'F', 'A'}, optional
-        If order is 'C' (False) then the result is contiguous (default).
-        If order is 'Fortran' (True) then the result has fortran order.
-        If order is 'Any' (None) then the result has fortran order
-        only if the array already is in fortran order.
+    Equivalent to ``a.copy(order='K')``.
 
     """))
 
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('__deepcopy__',
-    """a.__deepcopy__() -> Deep copy of array.
+    """a.__deepcopy__(memo, /) -> Deep copy of array.
 
-    Used if copy.deepcopy is called on an array.
+    Used if :func:`copy.deepcopy` is called on an array.
 
     """))
 
@@ -3093,9 +3362,12 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('__reduce__',
 
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('__setstate__',
-    """a.__setstate__(version, shape, dtype, isfortran, rawdata)
+    """a.__setstate__(state, /)
 
     For unpickling.
+
+    The `state` argument must be a sequence that contains the following
+    elements:
 
     Parameters
     ----------
@@ -3273,7 +3545,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('astype',
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('byteswap',
     """
-    a.byteswap(inplace)
+    a.byteswap(inplace=False)
 
     Swap the bytes of the array elements
 
@@ -3296,7 +3568,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('byteswap',
     >>> A = np.array([1, 256, 8755], dtype=np.int16)
     >>> map(hex, A)
     ['0x1', '0x100', '0x2233']
-    >>> A.byteswap(True)
+    >>> A.byteswap(inplace=True)
     array([  256,     1, 13090], dtype=int16)
     >>> map(hex, A)
     ['0x100', '0x1', '0x3322']
@@ -3399,7 +3671,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('copy',
         Controls the memory layout of the copy. 'C' means C-order,
         'F' means F-order, 'A' means 'F' if `a` is Fortran contiguous,
         'C' otherwise. 'K' means match the layout of `a` as closely
-        as possible. (Note that this function and :func:numpy.copy are very
+        as possible. (Note that this function and :func:`numpy.copy` are very
         similar, but have different default values for their order=
         arguments.)
 
@@ -3466,7 +3738,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('diagonal',
 
     Return specified diagonals. In NumPy 1.9 the returned array is a
     read-only view instead of a copy as in previous NumPy versions.  In
-    NumPy 1.10 the read-only restriction will be removed.
+    a future version the read-only restriction will be removed.
 
     Refer to :func:`numpy.diagonal` for full documentation.
 
@@ -3567,10 +3839,14 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('flatten',
 
     Parameters
     ----------
-    order : {'C', 'F', 'A'}, optional
-        Whether to flatten in row-major (C-style) or
-        column-major (Fortran-style) order or preserve the
-        C/Fortran ordering from `a`.  The default is 'C'.
+    order : {'C', 'F', 'A', 'K'}, optional
+        'C' means to flatten in row-major (C-style) order.
+        'F' means to flatten in column-major (Fortran-
+        style) order. 'A' means to flatten in column-major
+        order if `a` is Fortran *contiguous* in memory,
+        row-major order otherwise. 'K' means to flatten
+        `a` in the order the elements occur in memory.
+        The default is 'C'.
 
     Returns
     -------
@@ -3706,7 +3982,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('itemset',
 
     Parameters
     ----------
-    \*args : Arguments
+    \\*args : Arguments
         If one argument: a scalar, only used in case `a` is of size 1.
         If two arguments: the last argument is the value to be set
         and must be a scalar, the first argument specifies a single array
@@ -3741,7 +4017,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('itemset',
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('max',
     """
-    a.max(axis=None, out=None)
+    a.max(axis=None, out=None, keepdims=False)
 
     Return the maximum along a given axis.
 
@@ -3826,6 +4102,45 @@ add_newdoc('numpy.core.multiarray', 'shares_memory',
     """)
 
 
+add_newdoc('numpy.core.multiarray', 'may_share_memory',
+    """
+    may_share_memory(a, b, max_work=None)
+
+    Determine if two arrays might share memory
+
+    A return of True does not necessarily mean that the two arrays
+    share any element.  It just means that they *might*.
+
+    Only the memory bounds of a and b are checked by default.
+
+    Parameters
+    ----------
+    a, b : ndarray
+        Input arrays
+    max_work : int, optional
+        Effort to spend on solving the overlap problem.  See
+        `shares_memory` for details.  Default for ``may_share_memory``
+        is to do a bounds check.
+
+    Returns
+    -------
+    out : bool
+
+    See Also
+    --------
+    shares_memory
+
+    Examples
+    --------
+    >>> np.may_share_memory(np.array([1,2]), np.array([5,8,9]))
+    False
+    >>> x = np.zeros([3, 4])
+    >>> np.may_share_memory(x[:,0], x[:,1])
+    True
+
+    """)
+
+
 add_newdoc('numpy.core.multiarray', 'ndarray', ('newbyteorder',
     """
     arr.newbyteorder(new_order='S')
@@ -3845,13 +4160,13 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('newbyteorder',
     ----------
     new_order : string, optional
         Byte order to force; a value from the byte order specifications
-        above. `new_order` codes can be any of::
+        below. `new_order` codes can be any of:
 
-         * 'S' - swap dtype from current to opposite endian
-         * {'<', 'L'} - little endian
-         * {'>', 'B'} - big endian
-         * {'=', 'N'} - native order
-         * {'|', 'I'} - ignore (no change to byte order)
+        * 'S' - swap dtype from current to opposite endian
+        * {'<', 'L'} - little endian
+        * {'>', 'B'} - big endian
+        * {'=', 'N'} - native order
+        * {'|', 'I'} - ignore (no change to byte order)
 
         The default value ('S') results in swapping the current
         byte order. The code does a case-insensitive check on the first
@@ -3900,7 +4215,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('prod',
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('ptp',
     """
-    a.ptp(axis=None, out=None)
+    a.ptp(axis=None, out=None, keepdims=False)
 
     Peak to peak (maximum - minimum) value along a given axis.
 
@@ -3929,7 +4244,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('put',
 
 add_newdoc('numpy.core.multiarray', 'copyto',
     """
-    copyto(dst, src, casting='same_kind', where=None)
+    copyto(dst, src, casting='same_kind', where=True)
 
     Copies values from one array to another, broadcasting as necessary.
 
@@ -4047,6 +4362,13 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('reshape',
     --------
     numpy.reshape : equivalent function
 
+    Notes
+    -----
+    Unlike the free function `numpy.reshape`, this method on `ndarray` allows
+    the elements of the shape parameter to be passed in as separate arguments.
+    For example, ``a.reshape(10, 11)`` is equivalent to
+    ``a.reshape((10, 11))``.
+
     """))
 
 
@@ -4072,6 +4394,9 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('resize',
     ValueError
         If `a` does not own its own data or references or views to it exist,
         and the data memory must be changed.
+        PyPy only: will always raise if the data memory must be changed, since
+        there is no reliable way to determine if references or views to it
+        exist.
 
     SystemError
         If the `order` keyword argument is specified. This behaviour is a
@@ -4224,16 +4549,17 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('setflags',
     """
     a.setflags(write=None, align=None, uic=None)
 
-    Set array flags WRITEABLE, ALIGNED, and UPDATEIFCOPY, respectively.
+    Set array flags WRITEABLE, ALIGNED, (WRITEBACKIFCOPY and UPDATEIFCOPY),
+    respectively.
 
     These Boolean-valued flags affect how numpy interprets the memory
     area used by `a` (see Notes below). The ALIGNED flag can only
     be set to True if the data is actually aligned according to the type.
-    The UPDATEIFCOPY flag can never be set to True. The flag WRITEABLE
-    can only be set to True if the array owns its own memory, or the
-    ultimate owner of the memory exposes a writeable buffer interface,
-    or is a string. (The exception for string is made so that unpickling
-    can be done without copying memory.)
+    The WRITEBACKIFCOPY and (deprecated) UPDATEIFCOPY flags can never be set
+    to True. The flag WRITEABLE can only be set to True if the array owns its
+    own memory, or the ultimate owner of the memory exposes a writeable buffer
+    interface, or is a string. (The exception for string is made so that
+    unpickling can be done without copying memory.)
 
     Parameters
     ----------
@@ -4247,20 +4573,22 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('setflags',
     Notes
     -----
     Array flags provide information about how the memory area used
-    for the array is to be interpreted. There are 6 Boolean flags
-    in use, only three of which can be changed by the user:
-    UPDATEIFCOPY, WRITEABLE, and ALIGNED.
+    for the array is to be interpreted. There are 7 Boolean flags
+    in use, only four of which can be changed by the user:
+    WRITEBACKIFCOPY, UPDATEIFCOPY, WRITEABLE, and ALIGNED.
 
     WRITEABLE (W) the data area can be written to;
 
     ALIGNED (A) the data and strides are aligned appropriately for the hardware
     (as determined by the compiler);
 
-    UPDATEIFCOPY (U) this array is a copy of some other array (referenced
-    by .base). When this array is deallocated, the base array will be
-    updated with the contents of this array.
+    UPDATEIFCOPY (U) (deprecated), replaced by WRITEBACKIFCOPY;
 
-    All flags can be accessed using their first (upper case) letter as well
+    WRITEBACKIFCOPY (X) this array is a copy of some other array (referenced
+    by .base). When the C-API function PyArray_ResolveWritebackIfCopy is
+    called, the base array will be updated with the contents of this array.
+
+    All flags can be accessed using the single (upper case) letter as well
     as the full name.
 
     Examples
@@ -4275,6 +4603,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('setflags',
       OWNDATA : True
       WRITEABLE : True
       ALIGNED : True
+      WRITEBACKIFCOPY : False
       UPDATEIFCOPY : False
     >>> y.setflags(write=0, align=0)
     >>> y.flags
@@ -4283,11 +4612,12 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('setflags',
       OWNDATA : True
       WRITEABLE : False
       ALIGNED : False
+      WRITEBACKIFCOPY : False
       UPDATEIFCOPY : False
     >>> y.setflags(uic=1)
     Traceback (most recent call last):
       File "<stdin>", line 1, in <module>
-    ValueError: cannot set UPDATEIFCOPY flag to True
+    ValueError: cannot set WRITEBACKIFCOPY flag to True
 
     """))
 
@@ -4303,7 +4633,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('sort',
     axis : int, optional
         Axis along which to sort. Default is -1, which means sort along the
         last axis.
-    kind : {'quicksort', 'mergesort', 'heapsort'}, optional
+    kind : {'quicksort', 'mergesort', 'heapsort', 'stable'}, optional
         Sorting algorithm. Default is 'quicksort'.
     order : str or list of str, optional
         When `a` is an array with fields defined, this argument specifies
@@ -4352,7 +4682,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('partition',
     """
     a.partition(kth, axis=-1, kind='introselect', order=None)
 
-    Rearranges the elements in the array in such a way that value of the
+    Rearranges the elements in the array in such a way that the value of the
     element in kth position is in the position it would be in a sorted array.
     All elements smaller than the kth element are moved before this element and
     all equal or greater are moved behind it. The ordering of the elements in
@@ -4366,7 +4696,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('partition',
         Element index to partition by. The kth element value will be in its
         final sorted position and all smaller elements will be moved before it
         and all equal or greater elements behind it.
-        The order all elements in the partitions is undefined.
+        The order of all elements in the partitions is undefined.
         If provided with a sequence of kth it will partition all elements
         indexed by kth of them into their sorted position at once.
     axis : int, optional
@@ -4376,8 +4706,8 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('partition',
         Selection algorithm. Default is 'introselect'.
     order : str or list of str, optional
         When `a` is an array with fields defined, this argument specifies
-        which fields to compare first, second, etc.  A single field can
-        be specified as a string, and not all fields need be specified,
+        which fields to compare first, second, etc. A single field can
+        be specified as a string, and not all fields need to be specified,
         but unspecified fields will still be used, in the order in which
         they come up in the dtype, to break ties.
 
@@ -4394,7 +4724,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('partition',
     Examples
     --------
     >>> a = np.array([3, 4, 2, 1])
-    >>> a.partition(a, 3)
+    >>> a.partition(3)
     >>> a
     array([2, 1, 3, 4])
 
@@ -4509,6 +4839,11 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('tofile',
     machines with different endianness. Some of these problems can be overcome
     by outputting the data as text files, at the expense of speed and file
     size.
+    
+    When fid is a file object, array contents are directly written to the
+    file, bypassing the file object's ``write`` method. As a result, tofile
+    cannot be used with files objects supporting compression (e.g., GzipFile)
+    or file-like objects that do not support ``fileno()`` (e.g., BytesIO).
 
     """))
 
@@ -4730,7 +5065,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('view',
     >>> y = x.view(dtype=np.int16, type=np.matrix)
     >>> y
     matrix([[513]], dtype=int16)
-    >>> print type(y)
+    >>> print(type(y))
     <class 'numpy.matrixlib.defmatrix.matrix'>
 
     Creating a view on a structured array so it can be used in calculations
@@ -4746,7 +5081,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('view',
     Making changes to the view changes the underlying array
 
     >>> xv[0,1] = 20
-    >>> print x
+    >>> print(x)
     [(1, 20) (3, 4)]
 
     Using a view to convert an array to a recarray:
@@ -4790,7 +5125,7 @@ add_newdoc('numpy.core.umath', 'frompyfunc',
     """
     frompyfunc(func, nin, nout)
 
-    Takes an arbitrary Python function and returns a Numpy ufunc.
+    Takes an arbitrary Python function and returns a NumPy ufunc.
 
     Can be used, for example, to add broadcasting to a built-in Python
     function (see Examples section).
@@ -4807,7 +5142,11 @@ add_newdoc('numpy.core.umath', 'frompyfunc',
     Returns
     -------
     out : ufunc
-        Returns a Numpy universal function (``ufunc``) object.
+        Returns a NumPy universal function (``ufunc``) object.
+
+    See Also
+    --------
+    vectorize : evaluates pyfunc over input arrays using broadcasting rules of numpy
 
     Notes
     -----
@@ -4833,7 +5172,7 @@ add_newdoc('numpy.core.umath', 'geterrobj',
     Return the current object that defines floating-point error handling.
 
     The error object contains all information that defines the error handling
-    behavior in Numpy. `geterrobj` is used internally by the other
+    behavior in NumPy. `geterrobj` is used internally by the other
     functions that get and set error handling behavior (`geterr`, `seterr`,
     `geterrcall`, `seterrcall`).
 
@@ -4872,7 +5211,7 @@ add_newdoc('numpy.core.umath', 'geterrobj',
     [10000, 0, None]
 
     >>> def err_handler(type, flag):
-    ...     print "Floating point error (%s), with flag %s" % (type, flag)
+    ...     print("Floating point error (%s), with flag %s" % (type, flag))
     ...
     >>> old_bufsize = np.setbufsize(20000)
     >>> old_err = np.seterr(divide='raise')
@@ -4897,7 +5236,7 @@ add_newdoc('numpy.core.umath', 'seterrobj',
     Set the object that defines floating-point error handling.
 
     The error object contains all information that defines the error handling
-    behavior in Numpy. `seterrobj` is used internally by the other
+    behavior in NumPy. `seterrobj` is used internally by the other
     functions that set error handling behavior (`seterr`, `seterrcall`).
 
     Parameters
@@ -4936,7 +5275,7 @@ add_newdoc('numpy.core.umath', 'seterrobj',
     [10000, 0, None]
 
     >>> def err_handler(type, flag):
-    ...     print "Floating point error (%s), with flag %s" % (type, flag)
+    ...     print("Floating point error (%s), with flag %s" % (type, flag))
     ...
     >>> new_errobj = [20000, 12, err_handler]
     >>> np.seterrobj(new_errobj)
@@ -4962,18 +5301,22 @@ add_newdoc('numpy.core.multiarray', 'digitize',
 
     Return the indices of the bins to which each value in input array belongs.
 
-    Each index ``i`` returned is such that ``bins[i-1] <= x < bins[i]`` if
-    `bins` is monotonically increasing, or ``bins[i-1] > x >= bins[i]`` if
-    `bins` is monotonically decreasing. If values in `x` are beyond the
-    bounds of `bins`, 0 or ``len(bins)`` is returned as appropriate. If right
-    is True, then the right bin is closed so that the index ``i`` is such
-    that ``bins[i-1] < x <= bins[i]`` or bins[i-1] >= x > bins[i]`` if `bins`
-    is monotonically increasing or decreasing, respectively.
+    =========  =============  ============================
+    `right`    order of bins  returned index `i` satisfies
+    =========  =============  ============================
+    ``False``  increasing     ``bins[i-1] <= x < bins[i]``
+    ``True``   increasing     ``bins[i-1] < x <= bins[i]``
+    ``False``  decreasing     ``bins[i-1] > x >= bins[i]``
+    ``True``   decreasing     ``bins[i-1] >= x > bins[i]``
+    =========  =============  ============================
+
+    If values in `x` are beyond the bounds of `bins`, 0 or ``len(bins)`` is
+    returned as appropriate.
 
     Parameters
     ----------
     x : array_like
-        Input array to be binned. Prior to Numpy 1.10.0, this array had to
+        Input array to be binned. Prior to NumPy 1.10.0, this array had to
         be 1-dimensional, but can now have any shape.
     bins : array_like
         Array of bins. It has to be 1-dimensional and monotonic.
@@ -4986,7 +5329,7 @@ add_newdoc('numpy.core.multiarray', 'digitize',
 
     Returns
     -------
-    out : ndarray of ints
+    indices : ndarray of ints
         Output array of indices, of same shape as `x`.
 
     Raises
@@ -4998,7 +5341,7 @@ add_newdoc('numpy.core.multiarray', 'digitize',
 
     See Also
     --------
-    bincount, histogram, unique
+    bincount, histogram, unique, searchsorted
 
     Notes
     -----
@@ -5013,6 +5356,15 @@ add_newdoc('numpy.core.multiarray', 'digitize',
     for larger number of bins than the previous linear search. It also removes
     the requirement for the input array to be 1-dimensional.
 
+    For monotonically _increasing_ `bins`, the following are equivalent::
+
+        np.digitize(x, bins, right=True)
+        np.searchsorted(bins, x, side='left')
+
+    Note that as the order of the arguments are reversed, the side must be too.
+    The `searchsorted` call is marginally faster, as it does not do any
+    monotonicity checks. Perhaps more importantly, it supports all dtypes.
+
     Examples
     --------
     >>> x = np.array([0.2, 6.4, 3.0, 1.6])
@@ -5021,7 +5373,7 @@ add_newdoc('numpy.core.multiarray', 'digitize',
     >>> inds
     array([1, 4, 3, 2])
     >>> for n in range(x.size):
-    ...   print bins[inds[n]-1], "<=", x[n], "<", bins[inds[n]]
+    ...   print(bins[inds[n]-1], "<=", x[n], "<", bins[inds[n]])
     ...
     0.0 <= 0.2 < 1.0
     4.0 <= 6.4 < 10.0
@@ -5038,7 +5390,7 @@ add_newdoc('numpy.core.multiarray', 'digitize',
 
 add_newdoc('numpy.core.multiarray', 'bincount',
     """
-    bincount(x, weights=None, minlength=None)
+    bincount(x, weights=None, minlength=0)
 
     Count number of occurrences of each value in array of non-negative ints.
 
@@ -5072,7 +5424,7 @@ add_newdoc('numpy.core.multiarray', 'bincount',
     ------
     ValueError
         If the input is not 1-dimensional, or contains elements with negative
-        values, or if `minlength` is non-positive.
+        values, or if `minlength` is negative.
     TypeError
         If the type of the input is float or complex.
 
@@ -5094,7 +5446,7 @@ add_newdoc('numpy.core.multiarray', 'bincount',
     The input array needs to be of integer dtype, otherwise a
     TypeError is raised:
 
-    >>> np.bincount(np.arange(5, dtype=np.float))
+    >>> np.bincount(np.arange(5, dtype=float))
     Traceback (most recent call last):
       File "<stdin>", line 1, in <module>
     TypeError: array cannot be safely cast to required type
@@ -5257,7 +5609,8 @@ add_newdoc('numpy.core.multiarray', 'packbits',
     Parameters
     ----------
     myarray : array_like
-        An integer type array whose elements should be packed to bits.
+        An array of integers or booleans whose elements should be packed to
+        bits.
     axis : int, optional
         The dimension over which bit-packing is done.
         ``None`` implies packing the flattened array.
@@ -5306,7 +5659,8 @@ add_newdoc('numpy.core.multiarray', 'unpackbits',
     myarray : ndarray, uint8 type
        Input array.
     axis : int, optional
-       Unpacks along this axis.
+        The dimension over which bit-unpacking is done.
+        ``None`` implies unpacking the flattened array.
 
     Returns
     -------
@@ -5333,6 +5687,37 @@ add_newdoc('numpy.core.multiarray', 'unpackbits',
 
     """)
 
+add_newdoc('numpy.core._multiarray_tests', 'format_float_OSprintf_g',
+    """
+    format_float_OSprintf_g(val, precision)
+
+    Print a floating point scalar using the system's printf function,
+    equivalent to:
+
+        printf("%.*g", precision, val);
+
+    for half/float/double, or replacing 'g' by 'Lg' for longdouble. This
+    method is designed to help cross-validate the format_float_* methods.
+
+    Parameters
+    ----------
+    val : python float or numpy floating scalar
+        Value to format.
+
+    precision : non-negative integer, optional
+        Precision given to printf.
+
+    Returns
+    -------
+    rep : string
+        The string representation of the floating point value
+
+    See Also
+    --------
+    format_float_scientific
+    format_float_positional
+    """)
+
 
 ##############################################################################
 #
@@ -5351,40 +5736,19 @@ add_newdoc('numpy.core', 'ufunc',
     """
     Functions that operate element by element on whole arrays.
 
-    To see the documentation for a specific ufunc, use np.info().  For
-    example, np.info(np.sin).  Because ufuncs are written in C
+    To see the documentation for a specific ufunc, use `info`.  For
+    example, ``np.info(np.sin)``.  Because ufuncs are written in C
     (for speed) and linked into Python with NumPy's ufunc facility,
     Python's help() function finds this page whenever help() is called
     on a ufunc.
 
-    A detailed explanation of ufuncs can be found in the "ufuncs.rst"
-    file in the NumPy reference guide.
+    A detailed explanation of ufuncs can be found in the docs for :ref:`ufuncs`.
 
-    Unary ufuncs:
-    =============
+    Calling ufuncs:
+    ===============
 
-    op(X, out=None)
-    Apply op to X elementwise
-
-    Parameters
-    ----------
-    X : array_like
-        Input array.
-    out : array_like
-        An array to store the output. Must be the same shape as `X`.
-
-    Returns
-    -------
-    r : array_like
-        `r` will have the same shape as `X`; if out is provided, `r`
-        will be equal to out.
-
-    Binary ufuncs:
-    ==============
-
-    op(X, Y, out=None)
-    Apply `op` to `X` and `Y` elementwise. May "broadcast" to make
-    the shapes of `X` and `Y` congruent.
+    op(*x[, out], where=True, **kwargs)
+    Apply `op` to the arguments `*x` elementwise, broadcasting the arguments.
 
     The broadcasting rules are:
 
@@ -5393,18 +5757,29 @@ add_newdoc('numpy.core', 'ufunc',
 
     Parameters
     ----------
-    X : array_like
-        First input array.
-    Y : array_like
-        Second input array.
-    out : array_like
-        An array to store the output. Must be the same shape as the
-        output would have.
+    *x : array_like
+        Input arrays.
+    out : ndarray, None, or tuple of ndarray and None, optional
+        Alternate array object(s) in which to put the result; if provided, it
+        must have a shape that the inputs broadcast to. A tuple of arrays
+        (possible only as a keyword argument) must have length equal to the
+        number of outputs; use `None` for uninitialized outputs to be
+        allocated by the ufunc.
+    where : array_like, optional
+        Values of True indicate to calculate the ufunc at that position, values
+        of False indicate to leave the value in the output alone.  Note that if
+        an uninitialized return array is created via the default ``out=None``,
+        then the elements where the values are False will remain uninitialized.
+    **kwargs
+        For other keyword-only arguments, see the :ref:`ufunc docs <ufuncs.kwargs>`.
 
     Returns
     -------
-    r : array_like
-        The return value; if out is provided, `r` will be equal to out.
+    r : ndarray or tuple of ndarray
+        `r` will have the shape that the arrays in `x` broadcast to; if `out` is
+        provided, it will be returned. If not, `r` will be allocated and
+        may contain uninitialized values. If the function has more than one
+        output, then the result will be a tuple of arrays.
 
     """)
 
@@ -5430,7 +5805,7 @@ add_newdoc('numpy.core', 'ufunc', ('identity',
     1
     >>> np.power.identity
     1
-    >>> print np.exp.identity
+    >>> print(np.exp.identity)
     None
     """))
 
@@ -5562,6 +5937,36 @@ add_newdoc('numpy.core', 'ufunc', ('types',
 
     """))
 
+add_newdoc('numpy.core', 'ufunc', ('signature',
+    """
+    Definition of the core elements a generalized ufunc operates on.
+
+    The signature determines how the dimensions of each input/output array
+    are split into core and loop dimensions:
+
+    1. Each dimension in the signature is matched to a dimension of the
+       corresponding passed-in array, starting from the end of the shape tuple.
+    2. Core dimensions assigned to the same label in the signature must have
+       exactly matching sizes, no broadcasting is performed.
+    3. The core dimensions are removed from all inputs and the remaining
+       dimensions are broadcast together, defining the loop dimensions.
+
+    Notes
+    -----
+    Generalized ufuncs are used internally in many linalg functions, and in
+    the testing suite; the examples below are taken from these.
+    For ufuncs that operate on scalars, the signature is `None`, which is
+    equivalent to '()' for every argument.
+
+    Examples
+    --------
+    >>> np.core.umath_tests.matrix_multiply.signature
+    '(m,n),(n,p)->(m,p)'
+    >>> np.linalg._umath_linalg.det.signature
+    '(m,m)->()'
+    >>> np.add.signature is None
+    True  # equivalent to '(),()->()'
+    """))
 
 ##############################################################################
 #
@@ -5571,7 +5976,7 @@ add_newdoc('numpy.core', 'ufunc', ('types',
 
 add_newdoc('numpy.core', 'ufunc', ('reduce',
     """
-    reduce(a, axis=0, dtype=None, out=None, keepdims=False)
+    reduce(a, axis=0, dtype=None, out=None, keepdims=False, initial)
 
     Reduces `a`'s dimension by one, by applying ufunc along one axis.
 
@@ -5613,15 +6018,28 @@ add_newdoc('numpy.core', 'ufunc', ('reduce',
         The type used to represent the intermediate results. Defaults
         to the data-type of the output array if this is provided, or
         the data-type of the input array if no output array is provided.
-    out : ndarray, optional
-        A location into which the result is stored. If not provided, a
-        freshly-allocated array is returned.
+    out : ndarray, None, or tuple of ndarray and None, optional
+        A location into which the result is stored. If not provided or `None`,
+        a freshly-allocated array is returned. For consistency with
+        :ref:`ufunc.__call__`, if given as a keyword, this may be wrapped in a
+        1-element tuple.
+
+        .. versionchanged:: 1.13.0
+           Tuples are allowed for keyword argument.
     keepdims : bool, optional
         If this is set to True, the axes which are reduced are left
         in the result as dimensions with size one. With this option,
         the result will broadcast correctly against the original `arr`.
 
         .. versionadded:: 1.7.0
+    initial : scalar, optional
+        The value with which to start the reduction.
+        If the ufunc has no identity or the dtype is object, this defaults
+        to None - otherwise it defaults to ufunc.identity.
+        If ``None`` is given, the first element of the reduction is used,
+        and an error is thrown if the reduction is empty.
+        
+        .. versionadded:: 1.15.0
 
     Returns
     -------
@@ -5653,7 +6071,24 @@ add_newdoc('numpy.core', 'ufunc', ('reduce',
     >>> np.add.reduce(X, 2)
     array([[ 1,  5],
            [ 9, 13]])
-
+           
+    You can use the ``initial`` keyword argument to initialize the reduction with a
+    different value.
+    
+    >>> np.add.reduce([10], initial=5)
+    15
+    >>> np.add.reduce(np.ones((2, 2, 2)), axis=(0, 2), initializer=10)
+    array([14., 14.])
+    
+    Allows reductions of empty arrays where they would normally fail, i.e.
+    for ufuncs without an identity.
+    
+    >>> np.minimum.reduce([], initial=np.inf)
+    inf
+    >>> np.minimum.reduce([])
+    Traceback (most recent call last):
+        ...
+    ValueError: zero-size array to reduction operation minimum which has no identity
     """))
 
 add_newdoc('numpy.core', 'ufunc', ('accumulate',
@@ -5687,9 +6122,14 @@ add_newdoc('numpy.core', 'ufunc', ('accumulate',
         The data-type used to represent the intermediate results. Defaults
         to the data-type of the output array if such is provided, or the
         the data-type of the input array if no output array is provided.
-    out : ndarray, optional
-        A location into which the result is stored. If not provided a
-        freshly-allocated array is returned.
+    out : ndarray, None, or tuple of ndarray and None, optional
+        A location into which the result is stored. If not provided or `None`,
+        a freshly-allocated array is returned. For consistency with
+        :ref:`ufunc.__call__`, if given as a keyword, this may be wrapped in a
+        1-element tuple.
+
+        .. versionchanged:: 1.13.0
+           Tuples are allowed for keyword argument.
 
     Returns
     -------
@@ -5764,9 +6204,14 @@ add_newdoc('numpy.core', 'ufunc', ('reduceat',
         The type used to represent the intermediate results. Defaults
         to the data type of the output array if this is provided, or
         the data type of the input array if no output array is provided.
-    out : ndarray, optional
-        A location into which the result is stored. If not provided a
-        freshly-allocated array is returned.
+    out : ndarray, None, or tuple of ndarray and None, optional
+        A location into which the result is stored. If not provided or `None`,
+        a freshly-allocated array is returned. For consistency with
+        :ref:`ufunc.__call__`, if given as a keyword, this may be wrapped in a
+        1-element tuple.
+
+        .. versionchanged:: 1.13.0
+           Tuples are allowed for keyword argument.
 
     Returns
     -------
@@ -5834,7 +6279,7 @@ add_newdoc('numpy.core', 'ufunc', ('reduceat',
 
 add_newdoc('numpy.core', 'ufunc', ('outer',
     """
-    outer(A, B)
+    outer(A, B, **kwargs)
 
     Apply the ufunc `op` to all pairs (a, b) with a in `A` and b in `B`.
 
@@ -5857,6 +6302,8 @@ add_newdoc('numpy.core', 'ufunc', ('outer',
         First array
     B : array_like
         Second array
+    kwargs : any
+        Arguments to pass on to the ufunc. Typically `dtype` or `out`.
 
     Returns
     -------
@@ -5900,10 +6347,10 @@ add_newdoc('numpy.core', 'ufunc', ('at',
 
     Performs unbuffered in place operation on operand 'a' for elements
     specified by 'indices'. For addition ufunc, this method is equivalent to
-    `a[indices] += b`, except that results are accumulated for elements that
-    are indexed more than once. For example, `a[[0,0]] += 1` will only
+    ``a[indices] += b``, except that results are accumulated for elements that
+    are indexed more than once. For example, ``a[[0,0]] += 1`` will only
     increment the first element once because of buffering, whereas
-    `add.at(a, [0,0], 1)` will increment the first element twice.
+    ``add.at(a, [0,0], 1)`` will increment the first element twice.
 
     .. versionadded:: 1.8.0
 
@@ -5928,16 +6375,12 @@ add_newdoc('numpy.core', 'ufunc', ('at',
     >>> print(a)
     array([-1, -2, 3, 4])
 
-    ::
-
     Increment items 0 and 1, and increment item 2 twice:
 
     >>> a = np.array([1, 2, 3, 4])
     >>> np.add.at(a, [0, 1, 2, 2], 1)
     >>> print(a)
     array([2, 3, 5, 4])
-
-    ::
 
     Add items 0 and 1 in first array to second array,
     and store results in first array:
@@ -6026,7 +6469,7 @@ add_newdoc('numpy.core.multiarray', 'dtype',
     Using tuples.  ``int`` is a fixed type, 3 the field's shape.  ``void``
     is a flexible type, here of size 10:
 
-    >>> np.dtype([('hello',(np.int,3)),('world',np.void,10)])
+    >>> np.dtype([('hello',(int,3)),('world',np.void,10)])
     dtype([('hello', '<i4', 3), ('world', '|V10')])
 
     Subdivide ``int16`` into 2 ``int8``'s, called x and y.  0 and 1 are
@@ -6109,11 +6552,13 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('char',
 
 add_newdoc('numpy.core.multiarray', 'dtype', ('descr',
     """
-    Array-interface compliant full description of the data-type.
+    PEP3118 interface description of the data-type.
 
     The format is that required by the 'descr' key in the
-    `__array_interface__` attribute.
+    PEP3118 `__array_interface__` attribute.
 
+    Warning: This attribute exists specifically for PEP3118 compliance, and
+    is not a datatype description compatible with `np.dtype`.
     """))
 
 add_newdoc('numpy.core.multiarray', 'dtype', ('fields',
@@ -6138,7 +6583,7 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('fields',
     Examples
     --------
     >>> dt = np.dtype([('name', np.str_, 16), ('grades', np.float64, (2,))])
-    >>> print dt.fields
+    >>> print(dt.fields)
     {'grades': (dtype(('float64',(2,))), 16), 'name': (dtype('|S16'), 0)}
 
     """))
@@ -6180,7 +6625,7 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('isbuiltin',
     2  if the dtype is for a user-defined numpy type
        A user-defined type uses the numpy C-API machinery to extend
        numpy to handle a new array type. See
-       :ref:`user.user-defined-data-types` in the Numpy manual.
+       :ref:`user.user-defined-data-types` in the NumPy manual.
     =  ========================================================================
 
     Examples
@@ -6279,6 +6724,15 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('shape',
 
     """))
 
+add_newdoc('numpy.core.multiarray', 'dtype', ('ndim',
+    """
+    Number of dimensions of the sub-array if this data type describes a
+    sub-array, and ``0`` otherwise.
+
+    .. versionadded:: 1.13.0
+
+    """))
+
 add_newdoc('numpy.core.multiarray', 'dtype', ('str',
     """The array-protocol typestring of this data-type object."""))
 
@@ -6316,16 +6770,15 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('newbyteorder',
     Parameters
     ----------
     new_order : string, optional
-        Byte order to force; a value from the byte order
-        specifications below.  The default value ('S') results in
-        swapping the current byte order.
-        `new_order` codes can be any of::
+        Byte order to force; a value from the byte order specifications
+        below.  The default value ('S') results in swapping the current
+        byte order.  `new_order` codes can be any of:
 
-         * 'S' - swap dtype from current to opposite endian
-         * {'<', 'L'} - little endian
-         * {'>', 'B'} - big endian
-         * {'=', 'N'} - native order
-         * {'|', 'I'} - ignore (no change to byte order)
+        * 'S' - swap dtype from current to opposite endian
+        * {'<', 'L'} - little endian
+        * {'>', 'B'} - big endian
+        * {'=', 'N'} - native order
+        * {'|', 'I'} - ignore (no change to byte order)
 
         The code does a case-insensitive check on the first letter of
         `new_order` for these alternatives.  For example, any of '>'
@@ -6651,6 +7104,155 @@ add_newdoc('numpy.core.multiarray', 'busday_count',
     >>> # Number of Saturdays in 2011
     ... np.busday_count('2011', '2012', weekmask='Sat')
     53
+    """)
+
+add_newdoc('numpy.core.multiarray', 'normalize_axis_index',
+    """
+    normalize_axis_index(axis, ndim, msg_prefix=None)
+
+    Normalizes an axis index, `axis`, such that is a valid positive index into
+    the shape of array with `ndim` dimensions. Raises an AxisError with an
+    appropriate message if this is not possible.
+
+    Used internally by all axis-checking logic.
+
+    .. versionadded:: 1.13.0
+
+    Parameters
+    ----------
+    axis : int
+        The un-normalized index of the axis. Can be negative
+    ndim : int
+        The number of dimensions of the array that `axis` should be normalized
+        against
+    msg_prefix : str
+        A prefix to put before the message, typically the name of the argument
+
+    Returns
+    -------
+    normalized_axis : int
+        The normalized axis index, such that `0 <= normalized_axis < ndim`
+
+    Raises
+    ------
+    AxisError
+        If the axis index is invalid, when `-ndim <= axis < ndim` is false.
+
+    Examples
+    --------
+    >>> normalize_axis_index(0, ndim=3)
+    0
+    >>> normalize_axis_index(1, ndim=3)
+    1
+    >>> normalize_axis_index(-1, ndim=3)
+    2
+
+    >>> normalize_axis_index(3, ndim=3)
+    Traceback (most recent call last):
+    ...
+    AxisError: axis 3 is out of bounds for array of dimension 3
+    >>> normalize_axis_index(-4, ndim=3, msg_prefix='axes_arg')
+    Traceback (most recent call last):
+    ...
+    AxisError: axes_arg: axis -4 is out of bounds for array of dimension 3
+    """)
+
+add_newdoc('numpy.core.multiarray', 'datetime_as_string',
+    """
+    datetime_as_string(arr, unit=None, timezone='naive', casting='same_kind')
+
+    Convert an array of datetimes into an array of strings.
+
+    Parameters
+    ----------
+    arr : array_like of datetime64
+        The array of UTC timestamps to format.
+    unit : str
+        One of None, 'auto', or a :ref:`datetime unit <arrays.dtypes.dateunits>`.
+    timezone : {'naive', 'UTC', 'local'} or tzinfo
+        Timezone information to use when displaying the datetime. If 'UTC', end
+        with a Z to indicate UTC time. If 'local', convert to the local timezone
+        first, and suffix with a +-#### timezone offset. If a tzinfo object,
+        then do as with 'local', but use the specified timezone.
+    casting : {'no', 'equiv', 'safe', 'same_kind', 'unsafe'}
+        Casting to allow when changing between datetime units.
+
+    Returns
+    -------
+    str_arr : ndarray
+        An array of strings the same shape as `arr`.
+
+    Examples
+    --------
+    >>> d = np.arange('2002-10-27T04:30', 4*60, 60, dtype='M8[m]')
+    >>> d
+    array(['2002-10-27T04:30', '2002-10-27T05:30', '2002-10-27T06:30',
+           '2002-10-27T07:30'], dtype='datetime64[m]')
+
+    Setting the timezone to UTC shows the same information, but with a Z suffix
+
+    >>> np.datetime_as_string(d, timezone='UTC')
+    array(['2002-10-27T04:30Z', '2002-10-27T05:30Z', '2002-10-27T06:30Z',
+           '2002-10-27T07:30Z'], dtype='<U35')
+
+    Note that we picked datetimes that cross a DST boundary. Passing in a
+    ``pytz`` timezone object will print the appropriate offset
+
+    >>> np.datetime_as_string(d, timezone=pytz.timezone('US/Eastern'))
+    array(['2002-10-27T00:30-0400', '2002-10-27T01:30-0400',
+           '2002-10-27T01:30-0500', '2002-10-27T02:30-0500'], dtype='<U39')
+
+    Passing in a unit will change the precision
+
+    >>> np.datetime_as_string(d, unit='h')
+    array(['2002-10-27T04', '2002-10-27T05', '2002-10-27T06', '2002-10-27T07'],
+          dtype='<U32')
+    >>> np.datetime_as_string(d, unit='s')
+    array(['2002-10-27T04:30:00', '2002-10-27T05:30:00', '2002-10-27T06:30:00',
+           '2002-10-27T07:30:00'], dtype='<U38')
+
+    'casting' can be used to specify whether precision can be changed
+
+    >>> np.datetime_as_string(d, unit='h', casting='safe')
+    TypeError: Cannot create a datetime string as units 'h' from a NumPy
+    datetime with units 'm' according to the rule 'safe'
+    """)
+
+add_newdoc('numpy.core.multiarray', 'datetime_data',
+    """
+    datetime_data(dtype, /)
+
+    Get information about the step size of a date or time type.
+
+    The returned tuple can be passed as the second argument of `numpy.datetime64` and
+    `numpy.timedelta64`.
+
+    Parameters
+    ----------
+    dtype : dtype
+        The dtype object, which must be a `datetime64` or `timedelta64` type.
+
+    Returns
+    -------
+    unit : str
+        The :ref:`datetime unit <arrays.dtypes.dateunits>` on which this dtype
+        is based.
+    count : int
+        The number of base units in a step.
+
+    Examples
+    --------
+    >>> dt_25s = np.dtype('timedelta64[25s]')
+    >>> np.datetime_data(dt_25s)
+    ('s', 25)
+    >>> np.array(10, dt_25s).astype('timedelta64[s]')
+    array(250, dtype='timedelta64[s]')
+
+    The result can be used to construct a datetime that uses the same units
+    as a timedelta::
+
+    >>> np.datetime64('2010', np.datetime_data(dt_25s))
+    numpy.datetime64('2010-01-01T00:00:00','25s')
     """)
 
 ##############################################################################
@@ -7188,10 +7790,10 @@ add_newdoc('numpy.core.numerictypes', 'generic', ('newbyteorder',
 
     The `new_order` code can be any from the following:
 
+    * 'S' - swap dtype from current to opposite endian
     * {'<', 'L'} - little endian
     * {'>', 'B'} - big endian
     * {'=', 'N'} - native order
-    * 'S' - swap dtype from current to opposite endian
     * {'|', 'I'} - ignore (no change to byte order)
 
     Parameters
@@ -7569,7 +8171,7 @@ add_newdoc('numpy.core.numerictypes', 'generic', ('view',
 ##############################################################################
 
 add_newdoc('numpy.core.numerictypes', 'bool_',
-    """Numpy's Boolean type.  Character code: ``?``.  Alias: bool8""")
+    """NumPy's Boolean type.  Character code: ``?``.  Alias: bool8""")
 
 add_newdoc('numpy.core.numerictypes', 'complex64',
     """

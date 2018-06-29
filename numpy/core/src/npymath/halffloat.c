@@ -224,6 +224,17 @@ int npy_half_ge(npy_half h1, npy_half h2)
     return npy_half_le(h2, h1);
 }
 
+npy_half npy_half_divmod(npy_half h1, npy_half h2, npy_half *modulus)
+{
+    float fh1 = npy_half_to_float(h1);
+    float fh2 = npy_half_to_float(h2);
+    float div, mod;
+
+    div = npy_divmodf(fh1, fh2, &mod);
+    *modulus = npy_float_to_half(mod);
+    return npy_float_to_half(div);
+}
+
 
 
 /*
@@ -270,7 +281,7 @@ npy_uint16 npy_floatbits_to_halfbits(npy_uint32 f)
     if (f_exp <= 0x38000000u) {
         /*
          * Signed zeros, subnormal floats, and floats with small
-         * exponents all convert to signed zero halfs.
+         * exponents all convert to signed zero half-floats.
          */
         if (f_exp < 0x33000000u) {
 #if NPY_HALF_GENERATE_UNDERFLOW
@@ -385,7 +396,7 @@ npy_uint16 npy_doublebits_to_halfbits(npy_uint64 d)
     if (d_exp <= 0x3f00000000000000ULL) {
         /*
          * Signed zeros, subnormal floats, and floats with small
-         * exponents all convert to signed zero halfs.
+         * exponents all convert to signed zero half-floats.
          */
         if (d_exp < 0x3e60000000000000ULL) {
 #if NPY_HALF_GENERATE_UNDERFLOW

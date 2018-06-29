@@ -21,9 +21,7 @@
 #include "Python.h"
 
 #include "npy_config.h"
-#ifdef ENABLE_SEPARATE_COMPILATION
 #define PY_ARRAY_UNIQUE_SYMBOL _npy_umathmodule_ARRAY_API
-#endif
 
 #include "numpy/arrayobject.h"
 #include "numpy/ufuncobject.h"
@@ -89,57 +87,22 @@ ufunc_frompyfunc(PyObject *NPY_UNUSED(dummy), PyObject *args, PyObject *NPY_UNUS
     /* Keywords are ignored for now */
 
     PyObject *function, *pyname = NULL;
-    int nin, nout, i;
+    int nin, nout, i, nargs;
     PyUFunc_PyFuncData *fdata;
     PyUFuncObject *self;
-    char *fname, *str;
+    char *fname, *str, *types, *doc;
     Py_ssize_t fname_len = -1;
+    void * ptr, **data;
     int offset[2];
 
-    if (!PyArg_ParseTuple(args, "Oii", &function, &nin, &nout)) {
+    if (!PyArg_ParseTuple(args, "Oii:frompyfunc", &function, &nin, &nout)) {
         return NULL;
     }
     if (!PyCallable_Check(function)) {
         PyErr_SetString(PyExc_TypeError, "function must be callable");
         return NULL;
     }
-    if (nin + nout > NPY_MAXARGS) {
-        PyErr_Format(PyExc_ValueError,
-                     "Cannot construct a ufunc with more than %d operands "
-                     "(requested number were: inputs = %d and outputs = %d)",
-                     NPY_MAXARGS, nin, nout);
-        return NULL;
-    }
-    self = PyArray_malloc(sizeof(PyUFuncObject));
-    if (self == NULL) {
-        return NULL;
-    }
-    PyObject_Init((PyObject *)self, &PyUFunc_Type);
-
-    self->userloops = NULL;
-    self->nin = nin;
-    self->nout = nout;
-    self->nargs = nin + nout;
-    self->identity = PyUFunc_None;
-    self->functions = pyfunc_functions;
-    self->ntypes = 1;
-
-    /* generalized ufunc */
-    self->core_enabled = 0;
-    self->core_num_dim_ix = 0;
-    self->core_num_dims = NULL;
-    self->core_dim_ixs = NULL;
-    self->core_offsets = NULL;
-    self->core_signature = NULL;
-    self->op_flags = PyArray_malloc(sizeof(npy_uint32)*self->nargs);
-    if (self->op_flags == NULL) {
-        return PyErr_NoMemory();
-    }
-    memset(self->op_flags, 0, sizeof(npy_uint32)*self->nargs);
-    self->iter_flags = 0;
-
-    self->type_resolver = &object_ufunc_type_resolver;
-    self->legacy_inner_loop_selector = &object_ufunc_loop_selector;
+    nargs = nin + nout;
 
     pyname = PyObject_GetAttrString(function, "__name__");
     if (pyname) {
@@ -152,7 +115,7 @@ ufunc_frompyfunc(PyObject *NPY_UNUSED(dummy), PyObject *args, PyObject *NPY_UNUS
     }
 
     /*
-     * self->ptr holds a pointer for enough memory for
+     * ptr will be assigned to self->ptr, holds a pointer for enough memory for
      * self->data[0] (fdata)
      * self->data
      * self->name
@@ -166,39 +129,51 @@ ufunc_frompyfunc(PyObject *NPY_UNUSED(dummy), PyObject *args, PyObject *NPY_UNUS
     if (i) {
         offset[0] += (sizeof(void *) - i);
     }
-    offset[1] = self->nargs;
-    i = (self->nargs % sizeof(void *));
+    offset[1] = nargs;
+    i = (nargs % sizeof(void *));
     if (i) {
         offset[1] += (sizeof(void *)-i);
     }
-    self->ptr = PyArray_malloc(offset[0] + offset[1] + sizeof(void *) +
+    ptr = PyArray_malloc(offset[0] + offset[1] + sizeof(void *) +
                             (fname_len + 14));
-    if (self->ptr == NULL) {
+    if (ptr == NULL) {
         Py_XDECREF(pyname);
         return PyErr_NoMemory();
     }
-    Py_INCREF(function);
-    self->obj = function;
-    fdata = (PyUFunc_PyFuncData *)(self->ptr);
+    fdata = (PyUFunc_PyFuncData *)(ptr);
+    fdata->callable = function;
     fdata->nin = nin;
     fdata->nout = nout;
-    fdata->callable = function;
 
-    self->data = (void **)(((char *)self->ptr) + offset[0]);
-    self->data[0] = (void *)fdata;
-    self->types = (char *)self->data + sizeof(void *);
-    for (i = 0; i < self->nargs; i++) {
-        self->types[i] = NPY_OBJECT;
+    data = (void **)(((char *)ptr) + offset[0]);
+    data[0] = (void *)fdata;
+    types = (char *)data + sizeof(void *);
+    for (i = 0; i < nargs; i++) {
+        types[i] = NPY_OBJECT;
     }
-    str = self->types + offset[1];
+    str = types + offset[1];
     memcpy(str, fname, fname_len);
     memcpy(str+fname_len, " (vectorized)", 14);
-    self->name = str;
-
     Py_XDECREF(pyname);
 
     /* Do a better job someday */
-    self->doc = "dynamic ufunc based on a python function";
+    doc = "dynamic ufunc based on a python function";
+
+    self = (PyUFuncObject *)PyUFunc_FromFuncAndData(
+            (PyUFuncGenericFunction *)pyfunc_functions, data,
+            types, /* ntypes */ 1, nin, nout, PyUFunc_None,
+            str, doc, /* unused */ 0);
+
+    if (self == NULL) {
+        PyArray_free(ptr);
+        return NULL;
+    }
+    Py_INCREF(function);
+    self->obj = function;
+    self->ptr = ptr;
+
+    self->type_resolver = &object_ufunc_type_resolver;
+    self->legacy_inner_loop_selector = &object_ufunc_loop_selector;
 
     return (PyObject *)self;
 }
@@ -212,13 +187,13 @@ add_newdoc_ufunc(PyObject *NPY_UNUSED(dummy), PyObject *args)
     char *docstr, *newdocstr;
 
 #if defined(NPY_PY3K)
-    if (!PyArg_ParseTuple(args, "O!O!", &PyUFunc_Type, &ufunc,
+    if (!PyArg_ParseTuple(args, "O!O!:_add_newdoc_ufunc", &PyUFunc_Type, &ufunc,
                                         &PyUnicode_Type, &str)) {
         return NULL;
     }
     docstr = PyBytes_AS_STRING(PyUnicode_AsUTF8String(str));
 #else
-    if (!PyArg_ParseTuple(args, "O!O!", &PyUFunc_Type, &ufunc,
+    if (!PyArg_ParseTuple(args, "O!O!:_add_newdoc_ufunc", &PyUFunc_Type, &ufunc,
                                          &PyString_Type, &str)) {
          return NULL;
     }
@@ -268,7 +243,7 @@ intern_strings(void)
     npy_um_str_array_prepare = PyUString_InternFromString("__array_prepare__");
     npy_um_str_array_wrap = PyUString_InternFromString("__array_wrap__");
     npy_um_str_array_finalize = PyUString_InternFromString("__array_finalize__");
-    npy_um_str_ufunc = PyUString_InternFromString("__numpy_ufunc__");
+    npy_um_str_ufunc = PyUString_InternFromString("__array_ufunc__");
     npy_um_str_pyvals_name = PyUString_InternFromString(UFUNC_PYVALS_NAME);
 
     return npy_um_str_out && npy_um_str_subok && npy_um_str_array_prepare &&
@@ -312,10 +287,10 @@ static struct PyModuleDef moduledef = {
 #include <stdio.h>
 
 #if defined(NPY_PY3K)
-#define RETVAL m
+#define RETVAL(x) x
 PyMODINIT_FUNC PyInit_umath(void)
 #else
-#define RETVAL
+#define RETVAL(x)
 PyMODINIT_FUNC initumath(void)
 #endif
 {
@@ -332,7 +307,7 @@ PyMODINIT_FUNC initumath(void)
     m = Py_InitModule("umath", methods);
 #endif
     if (!m) {
-        return RETVAL;
+        goto err;
     }
 
     /* Import the array */
@@ -341,12 +316,12 @@ PyMODINIT_FUNC initumath(void)
             PyErr_SetString(PyExc_ImportError,
                             "umath failed: Could not import array core.");
         }
-        return RETVAL;
+        goto err;
     }
 
     /* Initialize the types */
     if (PyType_Ready(&PyUFunc_Type) < 0)
-        return RETVAL;
+        goto err;
 
     /* Add some symbolic constants to the module */
     d = PyModule_GetDict(m);
@@ -361,12 +336,10 @@ PyMODINIT_FUNC initumath(void)
         goto err;
     }
 
-    s = PyString_FromString("0.4.0");
-    PyDict_SetItemString(d, "__version__", s);
-    Py_DECREF(s);
-
     /* Load the ufunc operators into the array module's namespace */
-    InitOperators(d);
+    if (InitOperators(d) < 0) {
+        goto err;
+    }
 
     PyDict_SetItemString(d, "pi", s = PyFloat_FromDouble(NPY_PI));
     Py_DECREF(s);
@@ -430,7 +403,7 @@ PyMODINIT_FUNC initumath(void)
         goto err;
     }
 
-    return RETVAL;
+    return RETVAL(m);
 
  err:
     /* Check for errors */
@@ -438,5 +411,5 @@ PyMODINIT_FUNC initumath(void)
         PyErr_SetString(PyExc_RuntimeError,
                         "cannot load umath module.");
     }
-    return RETVAL;
+    return RETVAL(NULL);
 }

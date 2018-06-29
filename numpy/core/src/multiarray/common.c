@@ -14,6 +14,8 @@
 #include "common.h"
 #include "buffer.h"
 
+#include "get_attr_string.h"
+
 /*
  * The casting to use for implicit assignment operations resulting from
  * in-place operations (like +=) and out= arguments. (Notice that this
@@ -28,61 +30,6 @@
  * be allowed under the NPY_SAME_KIND_CASTING rules, and if not we issue a
  * warning (that people's code will be broken in a future release.)
  */
-
-/*
- * PyArray_GetAttrString_SuppressException:
- *
- * Stripped down version of PyObject_GetAttrString,
- * avoids lookups for None, tuple, and List objects,
- * and doesn't create a PyErr since this code ignores it.
- *
- * This can be much faster then PyObject_GetAttrString where
- * exceptions are not used by caller.
- *
- * 'obj' is the object to search for attribute.
- *
- * 'name' is the attribute to search for.
- *
- * Returns attribute value on success, 0 on failure.
- */
-PyObject *
-PyArray_GetAttrString_SuppressException(PyObject *obj, char *name)
-{
-    PyTypeObject *tp = Py_TYPE(obj);
-    PyObject *res = (PyObject *)NULL;
-
-    /* We do not need to check for special attributes on trivial types */
-    if (_is_basic_python_type(obj)) {
-        return NULL;
-    }
-
-    /* Attribute referenced by (char *)name */
-    if (tp->tp_getattr != NULL) {
-        res = (*tp->tp_getattr)(obj, name);
-        if (res == NULL) {
-            PyErr_Clear();
-        }
-    }
-    /* Attribute referenced by (PyObject *)name */
-    else if (tp->tp_getattro != NULL) {
-#if defined(NPY_PY3K)
-        PyObject *w = PyUnicode_InternFromString(name);
-#else
-        PyObject *w = PyString_InternFromString(name);
-#endif
-        if (w == NULL) {
-            return (PyObject *)NULL;
-        }
-        res = (*tp->tp_getattro)(obj, w);
-        Py_DECREF(w);
-        if (res == NULL) {
-            PyErr_Clear();
-        }
-    }
-    return res;
-}
-
-
 
 NPY_NO_EXPORT NPY_CASTING NPY_DEFAULT_ASSIGN_CASTING = NPY_SAME_KIND_CASTING;
 
@@ -127,30 +74,6 @@ _array_find_python_scalar_type(PyObject *op)
     }
     return NULL;
 }
-
-#if !defined(NPY_PY3K)
-static PyArray_Descr *
-_use_default_type(PyObject *op)
-{
-    int typenum, l;
-    PyObject *type;
-
-    typenum = -1;
-    l = 0;
-    type = (PyObject *)Py_TYPE(op);
-    while (l < NPY_NUMUSERTYPES) {
-        if (type == (PyObject *)(userdescrs[l]->typeobj)) {
-            typenum = l + NPY_USERDEF;
-            break;
-        }
-        l++;
-    }
-    if (typenum == -1) {
-        typenum = NPY_OBJECT;
-    }
-    return PyArray_DescrFromType(typenum);
-}
-#endif
 
 /*
  * These constants are used to signal that the recursive dtype determination in
@@ -382,7 +305,8 @@ PyArray_DTypeFromObjectHelper(PyObject *obj, int maxdims,
         memset(&buffer_view, 0, sizeof(Py_buffer));
         if (PyObject_GetBuffer(obj, &buffer_view,
                                PyBUF_FORMAT|PyBUF_STRIDES) == 0 ||
-            PyObject_GetBuffer(obj, &buffer_view, PyBUF_FORMAT) == 0) {
+            PyObject_GetBuffer(obj, &buffer_view,
+                               PyBUF_FORMAT|PyBUF_SIMPLE) == 0) {
 
             PyErr_Clear();
             dtype = _descriptor_from_pep3118_format(buffer_view.format);
@@ -406,7 +330,7 @@ PyArray_DTypeFromObjectHelper(PyObject *obj, int maxdims,
     }
 
     /* The array interface */
-    ip = PyArray_GetAttrString_SuppressException(obj, "__array_interface__");
+    ip = PyArray_LookupSpecial_OnInstance(obj, "__array_interface__");
     if (ip != NULL) {
         if (PyDict_Check(ip)) {
             PyObject *typestr;
@@ -439,7 +363,7 @@ PyArray_DTypeFromObjectHelper(PyObject *obj, int maxdims,
     }
 
     /* The array struct interface */
-    ip = PyArray_GetAttrString_SuppressException(obj, "__array_struct__");
+    ip = PyArray_LookupSpecial_OnInstance(obj, "__array_struct__");
     if (ip != NULL) {
         PyArrayInterface *inter;
         char buf[40];
@@ -474,7 +398,7 @@ PyArray_DTypeFromObjectHelper(PyObject *obj, int maxdims,
 #endif
 
     /* The __array__ attribute */
-    ip = PyArray_GetAttrString_SuppressException(obj, "__array__");
+    ip = PyArray_LookupSpecial_OnInstance(obj, "__array__");
     if (ip != NULL) {
         Py_DECREF(ip);
         ip = PyObject_CallMethod(obj, "__array__", NULL);
@@ -490,24 +414,19 @@ PyArray_DTypeFromObjectHelper(PyObject *obj, int maxdims,
         }
     }
 
-    /* Not exactly sure what this is about... */
-#if !defined(NPY_PY3K)
-    if (PyInstance_Check(obj)) {
-        dtype = _use_default_type(obj);
-        if (dtype == NULL) {
-            goto fail;
-        }
-        else {
-            goto promote_types;
-        }
-    }
-#endif
-
     /*
      * If we reached the maximum recursion depth without hitting one
-     * of the above cases, the output dtype should be OBJECT
+     * of the above cases, and obj isn't a sequence-like object, the output
+     * dtype should be either OBJECT or a user-defined type.
+     *
+     * Note that some libraries define sequence-like classes but want them to
+     * be treated as objects, and they expect numpy to treat it as an object if
+     * __len__ is not defined.
      */
-    if (maxdims == 0 || !PySequence_Check(obj)) {
+    if (maxdims == 0 || !PySequence_Check(obj) || PySequence_Size(obj) < 0) {
+        /* clear any PySequence_Size error which corrupts further calls */
+        PyErr_Clear();
+
         if (*out_dtype == NULL || (*out_dtype)->type_num != NPY_OBJECT) {
             Py_XDECREF(*out_dtype);
             *out_dtype = PyArray_DescrFromType(NPY_OBJECT);
@@ -518,20 +437,12 @@ PyArray_DTypeFromObjectHelper(PyObject *obj, int maxdims,
         return 0;
     }
 
-    /*
-     * fails if convertable to list but no len is defined which some libraries
-     * require to get object arrays
-     */
-    size = PySequence_Size(obj);
-    if (size < 0) {
-        goto fail;
-    }
-
     /* Recursive case, first check the sequence contains only one type */
     seq = PySequence_Fast(obj, "Could not convert object to sequence");
     if (seq == NULL) {
         goto fail;
     }
+    size = PySequence_Fast_GET_SIZE(seq);
     objects = PySequence_Fast_ITEMS(seq);
     common_type = size > 0 ? Py_TYPE(objects[0]) : NULL;
     for (i = 1; i < size; ++i) {
@@ -678,7 +589,7 @@ _zerofill(PyArrayObject *ret)
 NPY_NO_EXPORT int
 _IsAligned(PyArrayObject *ap)
 {
-    unsigned int i;
+    int i;
     npy_uintp aligned;
     npy_uintp alignment = PyArray_DESCR(ap)->alignment;
 
@@ -723,8 +634,12 @@ NPY_NO_EXPORT npy_bool
 _IsWriteable(PyArrayObject *ap)
 {
     PyObject *base=PyArray_BASE(ap);
+#if defined(NPY_PY3K)
+    Py_buffer view;
+#else
     void *dummy;
     Py_ssize_t n;
+#endif
 
     /* If we own our own data, then no-problem */
     if ((base == NULL) || (PyArray_FLAGS(ap) & NPY_ARRAY_OWNDATA)) {
@@ -758,9 +673,18 @@ _IsWriteable(PyArrayObject *ap)
     if (PyString_Check(base)) {
         return NPY_TRUE;
     }
-    if (PyObject_AsWriteBuffer(base, &dummy, &n) < 0) {
+#if defined(NPY_PY3K)
+    if (PyObject_GetBuffer(base, &view, PyBUF_WRITABLE|PyBUF_SIMPLE) < 0) {
+        PyErr_Clear();
         return NPY_FALSE;
     }
+    PyBuffer_Release(&view);
+#else
+    if (PyObject_AsWriteBuffer(base, &dummy, &n) < 0) {
+        PyErr_Clear();
+        return NPY_FALSE;
+    }
+#endif
     return NPY_TRUE;
 }
 
@@ -875,4 +799,56 @@ end:
     Py_XDECREF(shape2);
     Py_XDECREF(shape1_i);
     Py_XDECREF(shape2_j);
+}
+
+/**
+ * unpack tuple of dtype->fields (descr, offset, title[not-needed])
+ *
+ * @param "value" should be the tuple.
+ *
+ * @return "descr" will be set to the field's dtype
+ * @return "offset" will be set to the field's offset
+ *
+ * returns -1 on failure, 0 on success.
+ */
+NPY_NO_EXPORT int
+_unpack_field(PyObject *value, PyArray_Descr **descr, npy_intp *offset)
+{
+    PyObject * off;
+    if (PyTuple_GET_SIZE(value) < 2) {
+        return -1;
+    }
+    *descr = (PyArray_Descr *)PyTuple_GET_ITEM(value, 0);
+    off  = PyTuple_GET_ITEM(value, 1);
+
+    if (PyInt_Check(off)) {
+        *offset = PyInt_AsSsize_t(off);
+    }
+    else if (PyLong_Check(off)) {
+        *offset = PyLong_AsSsize_t(off);
+    }
+    else {
+        PyErr_SetString(PyExc_IndexError, "can't convert offset");
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * check whether arrays with datatype dtype might have object fields. This will
+ * only happen for structured dtypes (which may have hidden objects even if the
+ * HASOBJECT flag is false), object dtypes, or subarray dtypes whose base type
+ * is either of these.
+ */
+NPY_NO_EXPORT int
+_may_have_objects(PyArray_Descr *dtype)
+{
+    PyArray_Descr *base = dtype;
+    if (PyDataType_HASSUBARRAY(dtype)) {
+        base = dtype->subarray->base;
+    }
+
+    return (PyDataType_HASFIELDS(base) ||
+            PyDataType_FLAGCHK(base, NPY_ITEM_HASOBJECT) );
 }

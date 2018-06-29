@@ -1,7 +1,7 @@
 # Makefile for Sphinx documentation
 #
 
-PYVER = 2.7
+PYVER = 3.6
 PYTHON = python$(PYVER)
 
 # You can set these variables from the command line.
@@ -32,6 +32,7 @@ help:
 	@echo "  linkcheck to check all external links for integrity"
 	@echo "  dist PYVER=... to make a distribution-ready tree"
 	@echo "  gitwash-update GITWASH=path/to/gitwash  update gitwash developer docs"
+	@echo "  upload USERNAME=... RELEASE=... to upload built docs to docs.scipy.org"
 
 clean:
 	-rm -rf build/* source/reference/generated
@@ -59,6 +60,7 @@ gitwash-update:
 
 INSTALL_DIR = $(CURDIR)/build/inst-dist/
 INSTALL_PPH = $(INSTALL_DIR)/lib/python$(PYVER)/site-packages:$(INSTALL_DIR)/local/lib/python$(PYVER)/site-packages:$(INSTALL_DIR)/lib/python$(PYVER)/dist-packages:$(INSTALL_DIR)/local/lib/python$(PYVER)/dist-packages
+UPLOAD_DIR=/srv/docs_scipy_org/doc/numpy-$(RELEASE)
 
 DIST_VARS=SPHINXBUILD="LANG=C PYTHONPATH=$(INSTALL_PPH) python$(PYVER) `which sphinx-build`" PYTHON="PYTHONPATH=$(INSTALL_PPH) python$(PYVER)" SPHINXOPTS="$(SPHINXOPTS)"
 
@@ -72,18 +74,34 @@ real-dist: dist-build html html-scipyorg
 	-rm -rf build/dist
 	cp -r build/html-scipyorg build/dist
 	cd build/html && zip -9r ../dist/numpy-html.zip .
-	cp build/latex/numpy-*.pdf build/dist
-	-zip build/dist/numpy-chm.zip build/htmlhelp/numpy.chm
+	cp build/latex/numpy-ref.pdf build/dist
+	cp build/latex/numpy-user.pdf build/dist
 	cd build/dist && tar czf ../dist.tar.gz *
 	chmod ug=rwX,o=rX -R build/dist
 	find build/dist -type d -print0 | xargs -0r chmod g+s
 
 dist-build:
 	rm -f ../dist/*.egg
-	cd .. && $(PYTHON) setupegg.py bdist_egg
+	cd .. && $(PYTHON) setup.py bdist_egg
 	install -d $(subst :, ,$(INSTALL_PPH))
 	$(PYTHON) `which easy_install` --prefix=$(INSTALL_DIR) ../dist/*.egg
 
+upload:
+	# SSH must be correctly configured for this to work.
+	# Assumes that ``make dist`` was already run
+	# Example usage: ``make upload USERNAME=rgommers RELEASE=1.10.1``
+	ssh $(USERNAME)@docs.scipy.org mkdir $(UPLOAD_DIR)
+	scp build/dist.tar.gz $(USERNAME)@docs.scipy.org:$(UPLOAD_DIR)
+	ssh $(USERNAME)@docs.scipy.org tar xvC $(UPLOAD_DIR) \
+	    -zf $(UPLOAD_DIR)/dist.tar.gz
+	ssh $(USERNAME)@docs.scipy.org mv $(UPLOAD_DIR)/numpy-ref.pdf \
+	    $(UPLOAD_DIR)/numpy-ref-$(RELEASE).pdf
+	ssh $(USERNAME)@docs.scipy.org mv $(UPLOAD_DIR)/numpy-user.pdf \
+	    $(UPLOAD_DIR)/numpy-user-$(RELEASE).pdf
+	ssh $(USERNAME)@docs.scipy.org mv $(UPLOAD_DIR)/numpy-html.zip \
+	    $(UPLOAD_DIR)/numpy-html-$(RELEASE).zip
+	ssh $(USERNAME)@docs.scipy.org rm $(UPLOAD_DIR)/dist.tar.gz
+	ssh $(USERNAME)@docs.scipy.org ln -snf numpy-$(RELEASE) /srv/docs_scipy_org/doc/numpy
 
 #------------------------------------------------------------------------------
 # Basic Sphinx generation rules for different formats

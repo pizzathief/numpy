@@ -22,19 +22,13 @@ import copy
 import re
 import os
 import sys
-from .auxfuncs import (
-    debugcapi, dictappend, errmess, gentitle, getcallprotoargument,
-    getcallstatement, getfortranname, getpymethoddef, getrestdoc,
-    getusercode, getusercode1, hasinitvalue, hasnote, hasresultnote,
-    isarray, iscomplex, iscomplexarray, iscomplexfunction, isexternal,
-    isfunction, isintent_aux, isintent_callback, isintent_dict,
-    isintent_hide, isintent_in, isintent_inout, isintent_out, ismodule,
-    isoptional, isrequired, isscalar, isstring, isstringarray,
-    isstringfunction, issubroutine, l_and, l_not, l_or, outmess
-)
-
 from .crackfortran import markoutercomma
 from . import cb_rules
+
+# The eviroment provided by auxfuncs.py is needed for some calls to eval.
+# As the needed functions cannot be determined by static inspection of the
+# code, it is safest to use import * pending a major refactoring of f2py.
+from .auxfuncs import *
 
 __all__ = [
     'getctype', 'getstrlength', 'getarrdims', 'getpydocsign',
@@ -71,7 +65,7 @@ c2py_map = {'double': 'float',
 c2capi_map = {'double': 'NPY_DOUBLE',
               'float': 'NPY_FLOAT',
               'long_double': 'NPY_DOUBLE',           # forced casting
-              'char': 'NPY_CHAR',
+              'char': 'NPY_STRING',
               'unsigned_char': 'NPY_UBYTE',
               'signed_char': 'NPY_BYTE',
               'short': 'NPY_SHORT',
@@ -83,7 +77,7 @@ c2capi_map = {'double': 'NPY_DOUBLE',
               'complex_float': 'NPY_CFLOAT',
               'complex_double': 'NPY_CDOUBLE',
               'complex_long_double': 'NPY_CDOUBLE',   # forced casting
-              'string': 'NPY_CHAR'}
+              'string': 'NPY_STRING'}
 
 # These new maps aren't used anyhere yet, but should be by default
 #  unless building numeric or numarray extensions.
@@ -105,10 +99,7 @@ if using_newcore:
                   'complex_float': 'NPY_CFLOAT',
                   'complex_double': 'NPY_CDOUBLE',
                   'complex_long_double': 'NPY_CDOUBLE',
-                  # f2py 2e is not ready for NPY_STRING (must set itemisize
-                  # etc)
-                  'string': 'NPY_CHAR',
-                  #'string':'NPY_STRING'
+                  'string':'NPY_STRING'
 
                   }
 c2pycode_map = {'double': 'd',
@@ -217,7 +208,7 @@ if os.path.isfile('.f2py_f2cmap'):
                 else:
                     errmess("\tIgnoring map {'%s':{'%s':'%s'}}: '%s' must be in %s\n" % (
                         k, k1, d[k][k1], d[k][k1], list(c2py_map.keys())))
-        outmess('Succesfully applied user defined changes from .f2py_f2cmap\n')
+        outmess('Successfully applied user defined changes from .f2py_f2cmap\n')
     except Exception as msg:
         errmess(
             'Failed to apply user defined changes from .f2py_f2cmap: %s. Skipping.\n' % (msg))
@@ -337,12 +328,12 @@ def getarrdims(a, var, verbose=0):
         ret['size'] = '*'.join(dim)
         try:
             ret['size'] = repr(eval(ret['size']))
-        except:
+        except Exception:
             pass
         ret['dims'] = ','.join(dim)
         ret['rank'] = repr(len(dim))
         ret['rank*[-1]'] = repr(len(dim) * [-1])[1:-1]
-        for i in range(len(dim)):  # solve dim for dependecies
+        for i in range(len(dim)):  # solve dim for dependencies
             v = []
             if dim[i] in depargs:
                 v = [dim[i]]
@@ -494,7 +485,7 @@ def getinit(a, var):
                 else:
                     v = eval(v, {}, {})
                     ret['init.r'], ret['init.i'] = str(v.real), str(v.imag)
-            except:
+            except Exception:
                 raise ValueError(
                     'getinit: expected complex number `(r,i)\' but got `%s\' as initial value of %r.' % (init, a))
             if isarray(var):
@@ -525,8 +516,7 @@ def sign2map(a, var):
             if k[:4] == 'out=':
                 out_a = k[4:]
                 break
-    ret = {'varname': a, 'outvarname': out_a}
-    ret['ctype'] = getctype(var)
+    ret = {'varname': a, 'outvarname': out_a, 'ctype': getctype(var)}
     intent_flags = []
     for f, s in isintent_dict.items():
         if f(var):
@@ -829,8 +819,7 @@ void
 
 
 def common_sign2map(a, var):  # obsolute
-    ret = {'varname': a}
-    ret['ctype'] = getctype(var)
+    ret = {'varname': a, 'ctype': getctype(var)}
     if isstringarray(var):
         ret['ctype'] = 'char'
     if ret['ctype'] in c2capi_map:
