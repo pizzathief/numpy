@@ -6,9 +6,17 @@
 #include "numpy/arrayscalars.h"
 #include "numpy/npy_math.h"
 #include "numpy/halffloat.h"
+#include "common.h"
 #include "mem_overlap.h"
 #include "npy_extint128.h"
 #include "common.h"
+
+
+#if defined(MS_WIN32) || defined(__CYGWIN__)
+#define EXPORT(x) __declspec(dllexport) x
+#else
+#define EXPORT(x) x
+#endif
 
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
 
@@ -29,6 +37,12 @@ IsPythonScalar(PyObject * dummy, PyObject *args)
 }
 
 #include "npy_pycompat.h"
+
+/** Function to test calling via ctypes */
+EXPORT(void*) forward_pointer(void *x)
+{
+    return x;
+}
 
 /*
  * TODO:
@@ -579,6 +593,25 @@ fail:
     return NULL;
 }
 
+/*
+ * Helper to test fromstring of 0 terminated strings, as the C-API supports
+ * the -1 length identifier.
+ */
+static PyObject *
+fromstring_null_term_c_api(PyObject *dummy, PyObject *byte_obj)
+{
+    char *string;
+
+    string = PyBytes_AsString(byte_obj);
+    if (string == NULL) {
+        return NULL;
+    }
+
+    return PyArray_FromString(
+                    string, -1, PyArray_DescrFromType(NPY_FLOAT64), -1, " ");
+}
+
+
 /* check no elison for avoided increfs */
 static PyObject *
 incref_elide(PyObject *dummy, PyObject *args)
@@ -833,6 +866,29 @@ get_buffer_info(PyObject *NPY_UNUSED(self), PyObject *args)
 
 #undef GET_PYBUF_FLAG
 
+/*
+ * Return a new array object wrapping existing C-allocated (dummy) data.
+ * Such an array does not own its data (must not free it), but because it
+ * wraps C data, it also has no base object. Used to test arr.flags.writeable
+ * setting behaviour.
+ */
+static PyObject*
+get_c_wrapping_array(PyObject* NPY_UNUSED(self), PyObject* arg)
+{
+    int writeable, flags;
+    npy_intp zero = 0;
+
+    writeable = PyObject_IsTrue(arg);
+    if (error_converting(writeable)) {
+        return NULL;
+    }
+
+    flags = writeable ? NPY_ARRAY_WRITEABLE : 0;
+    /* Create an empty array (which points to a random place) */
+    return PyArray_NewFromDescr(&PyArray_Type, PyArray_DescrFromType(NPY_INTP),
+                                1, &zero, NULL, &zero, flags, NULL);
+}
+
 
 /*
  * Test C-api level item getting.
@@ -891,6 +947,7 @@ test_as_c_array(PyObject *NPY_UNUSED(self), PyObject *args)
 
     num_dims = PyArray_NDIM(array_obj);
     descr = PyArray_DESCR(array_obj);
+    Py_INCREF(descr);  /* PyArray_AsCArray steals a reference to this */
 
     switch (num_dims) {
         case 1:
@@ -933,6 +990,7 @@ test_as_c_array(PyObject *NPY_UNUSED(self), PyObject *args)
             PyArray_Free((PyObject *) array_obj, (void *) array3);
             break;
         default:
+            Py_DECREF(descr);
             PyErr_SetString(PyExc_ValueError, "array.ndim not in [1, 3]");
             return NULL;
     }
@@ -1226,7 +1284,9 @@ pylong_from_int128(npy_extint128_t value)
     }
 
     Py_DECREF(val);
+    Py_DECREF(val_64);
     val = tmp;
+    val_64 = NULL;
 
     tmp = PyLong_FromUnsignedLongLong(value.lo);
     if (tmp == NULL) {
@@ -1641,6 +1701,42 @@ extint_ceildiv_128_64(PyObject *NPY_UNUSED(self), PyObject *args) {
     return pylong_from_int128(c);
 }
 
+struct TestStruct1 {
+    npy_uint8 a;
+    npy_complex64 b;
+};
+
+struct TestStruct2 {
+    npy_uint32 a;
+    npy_complex64 b;
+};
+
+struct TestStruct3 {
+    npy_uint8 a;
+    struct TestStruct1 b;
+};
+
+static PyObject *
+get_struct_alignments(PyObject *NPY_UNUSED(self), PyObject *args) {
+    PyObject *ret = PyTuple_New(3);
+    PyObject *alignment, *size, *val;
+
+/**begin repeat
+ * #N = 1,2,3#
+ */
+    alignment = PyInt_FromLong(_ALIGN(struct TestStruct@N@));
+    size = PyInt_FromLong(sizeof(struct TestStruct@N@));
+    val = PyTuple_Pack(2, alignment, size);
+    Py_DECREF(alignment);
+    Py_DECREF(size);
+    if (val == NULL) {
+        return NULL;
+    }
+    PyTuple_SET_ITEM(ret, @N@-1, val);
+/**end repeat**/
+    return ret;
+}
+
 
 static char get_fpu_mode_doc[] = (
     "get_fpu_mode()\n"
@@ -1818,6 +1914,19 @@ printf_float_g(PyObject *NPY_UNUSED(dummy), PyObject *args, PyObject *kwds)
     return PrintFloat_Printf_g(obj, precision);
 }
 
+static PyObject *
+getset_numericops(PyObject* NPY_UNUSED(self), PyObject* NPY_UNUSED(args))
+{
+    PyObject *ret;
+    PyObject *ops = PyArray_GetNumericOps();
+    if (ops == NULL) {
+        return NULL;
+    }
+    ret = PyLong_FromLong(PyArray_SetNumericOps(ops));
+    Py_DECREF(ops);
+    return ret;
+}
+
 static PyMethodDef Multiarray_TestsMethods[] = {
     {"IsPythonScalar",
         IsPythonScalar,
@@ -1837,6 +1946,9 @@ static PyMethodDef Multiarray_TestsMethods[] = {
     {"test_inplace_increment",
         inplace_increment,
         METH_VARARGS, NULL},
+    {"fromstring_null_term_c_api",
+        fromstring_null_term_c_api,
+        METH_O, NULL},
     {"incref_elide",
         incref_elide,
         METH_VARARGS, NULL},
@@ -1869,6 +1981,9 @@ static PyMethodDef Multiarray_TestsMethods[] = {
     {"get_buffer_info",
         get_buffer_info,
         METH_VARARGS, NULL},
+    {"get_c_wrapping_array",
+        get_c_wrapping_array,
+        METH_O, NULL},
     {"array_indexing",
         array_indexing,
         METH_VARARGS, NULL},
@@ -1926,6 +2041,9 @@ static PyMethodDef Multiarray_TestsMethods[] = {
     {"get_fpu_mode",
         get_fpu_mode,
         METH_VARARGS, get_fpu_mode_doc},
+    {"getset_numericops",
+        getset_numericops,
+        METH_NOARGS, NULL},
 /**begin repeat
  * #name = cabs, carg#
  */
@@ -1956,6 +2074,9 @@ static PyMethodDef Multiarray_TestsMethods[] = {
     {"format_float_OSprintf_g",
         (PyCFunction)printf_float_g,
         METH_VARARGS , NULL},
+    {"get_struct_alignments",
+        get_struct_alignments,
+        METH_VARARGS, NULL},
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
@@ -1999,4 +2120,10 @@ init_multiarray_tests(void)
                         "cannot load _multiarray_tests module.");
     }
     return RETVAL;
+}
+
+NPY_NO_EXPORT int
+test_not_exported(void)
+{
+    return 1;
 }

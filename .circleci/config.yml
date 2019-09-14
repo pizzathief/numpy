@@ -8,7 +8,7 @@ jobs:
     docker:
       # CircleCI maintains a library of pre-built images
       # documented at https://circleci.com/docs/2.0/circleci-images/
-      - image: circleci/python:3.6.1
+      - image: circleci/python:3.6.6
 
     working_directory: ~/repo
 
@@ -19,8 +19,9 @@ jobs:
           name: install dependencies
           command: |
             python3 -m venv venv
+            ln -s $(which python3) venv/bin/python3.6
             . venv/bin/activate
-            pip install cython sphinx matplotlib
+            pip install cython sphinx==1.8.5 matplotlib ipython
             sudo apt-get update
             sudo apt-get install -y graphviz texlive-fonts-recommended texlive-latex-recommended texlive-latex-extra texlive-generic-extra latexmk texlive-xetex
 
@@ -39,18 +40,17 @@ jobs:
             . venv/bin/activate
             cd doc
             git submodule update --init
-            make html
+            SPHINXOPTS=-q make -e html
 
       - run:
           name: build neps
           command: |
             . venv/bin/activate
             cd doc/neps
-            make html
+            SPHINXOPTS=-q make -e html
 
-     # - store_artifacts:
-     #     path: doc/build/html/
-     #     destination: devdocs
+      - store_artifacts:
+          path: doc/build/html/
 
 
      #  - store_artifacts:

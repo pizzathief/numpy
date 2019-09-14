@@ -1,6 +1,6 @@
-=========================================
-Simplified and explicit advanced indexing
-=========================================
+==================================================
+NEP 21 — Simplified and explicit advanced indexing
+==================================================
 
 :Author: Sebastian Berg
 :Author: Stephan Hoyer <shoyer@google.com>
@@ -311,7 +311,7 @@ Subclasses are a bit problematic in the light of these changes. There are
 some possible solutions for this. For most subclasses (those which do not
 provide ``__getitem__`` or ``__setitem__``) the special attributes should
 just work. Subclasses that *do* provide it must be updated accordingly
-and should preferably not subclass working versions of these attributes.
+and should preferably not subclass ``oindex`` and ``vindex``.
 
 All subclasses will inherit the attributes, however, the implementation
 of ``__getitem__`` on these attributes should test
@@ -348,9 +348,12 @@ Backward compatibility
 ----------------------
 
 As a new feature, no backward compatibility issues with the new ``vindex``
-and ``oindex`` attributes would arise. To facilitate backwards compatibility
-as much as possible, we expect a long deprecation cycle for legacy indexing
-behavior and propose the new ``legacy_index`` attribute.
+and ``oindex`` attributes would arise.
+
+To facilitate backwards compatibility as much as possible, we expect a long
+deprecation cycle for legacy indexing behavior and propose the new
+``legacy_index`` attribute.
+
 Some forward compatibility issues with subclasses that do not specifically
 implement the new methods may arise.
 
@@ -500,7 +503,7 @@ Vectorized/inner indexing
 -------------------------
 
 Multiple indices are broadcasted and iterated as one like fancy indexing,
-but the new axes area always inserted at the front::
+but the new axes are always inserted at the front::
 
     >>> arr.vindex[:, [0], [0, 1], :].shape
     (2, 5, 8)
@@ -627,7 +630,7 @@ At this point we have left the straight forward world of ``oindex`` but can
 do random picking of any element from the array. Note that in the last example
 a method such as mentioned in the ``Related Questions`` section could be more
 straight forward. But this approach is even more flexible, since ``rows``
-does not have to be a simple ``arange``, but could be ``intersting_times``::
+does not have to be a simple ``arange``, but could be ``interesting_times``::
 
     >>> interesting_times = np.array([0, 4, 8, 9, 10])
     >>> correct_sensors_at_it = correct_sensors[interesting_times, :]

@@ -133,18 +133,8 @@ else:
     from .version import git_revision as __git_revision__
     from .version import version as __version__
 
-    from ._import_tools import PackageLoader
-
-    def pkgload(*packages, **options):
-        loader = PackageLoader(infunc=True)
-        return loader(*packages, **options)
-
-    from . import add_newdocs
-    __all__ = ['add_newdocs',
-               'ModuleDeprecationWarning',
+    __all__ = ['ModuleDeprecationWarning',
                'VisibleDeprecationWarning']
-
-    pkgload.__doc__ = PackageLoader.__call__.__doc__
 
     # Allow distributors to run custom init code
     from . import _distributor_init
@@ -173,25 +163,58 @@ else:
         from __builtin__ import bool, int, float, complex, object, unicode, str
 
     from .core import round, abs, max, min
+    # now that numpy modules are imported, can initialize limits
+    core.getlimits._register_known_types()
 
-    __all__.extend(['__version__', 'pkgload', 'PackageLoader',
-               'show_config'])
+    __all__.extend(['bool', 'int', 'float', 'complex', 'object', 'unicode',
+                    'str'])
+    __all__.extend(['__version__', 'show_config'])
     __all__.extend(core.__all__)
     __all__.extend(_mat.__all__)
     __all__.extend(lib.__all__)
     __all__.extend(['linalg', 'fft', 'random', 'ctypeslib', 'ma'])
+
+    # Filter out Cython harmless warnings
+    warnings.filterwarnings("ignore", message="numpy.dtype size changed")
+    warnings.filterwarnings("ignore", message="numpy.ufunc size changed")
+    warnings.filterwarnings("ignore", message="numpy.ndarray size changed")
 
     # oldnumeric and numarray were removed in 1.9. In case some packages import
     # but do not use them, we define them here for backward compatibility.
     oldnumeric = 'removed'
     numarray = 'removed'
 
-    # We don't actually use this ourselves anymore, but I'm not 100% sure that
-    # no-one else in the world is using it (though I hope not)
-    from .testing import Tester
+    if sys.version_info[:2] >= (3, 7):
+        # Importing Tester requires importing all of UnitTest which is not a
+        # cheap import Since it is mainly used in test suits, we lazy import it
+        # here to save on the order of 10 ms of import time for most users
+        #
+        # The previous way Tester was imported also had a side effect of adding
+        # the full `numpy.testing` namespace
+        #
+        # module level getattr is only supported in 3.7 onwards
+        # https://www.python.org/dev/peps/pep-0562/
+        def __getattr__(attr):
+            if attr == 'testing':
+                import numpy.testing as testing
+                return testing
+            elif attr == 'Tester':
+                from .testing import Tester
+                return Tester
+            else:
+                raise AttributeError("module {!r} has no attribute "
+                                     "{!r}".format(__name__, attr))
+
+        def __dir__():
+            return __all__ + ['Tester', 'testing']
+
+    else:
+        # We don't actually use this ourselves anymore, but I'm not 100% sure that
+        # no-one else in the world is using it (though I hope not)
+        from .testing import Tester
 
     # Pytest testing
-    from numpy.testing._private.pytesttester import PytestTester
+    from numpy._pytesttester import PytestTester
     test = PytestTester(__name__)
     del PytestTester
 
@@ -214,7 +237,9 @@ else:
         except AssertionError:
             msg = ("The current Numpy installation ({!r}) fails to "
                    "pass simple sanity checks. This can be caused for example "
-                   "by incorrect BLAS library being linked in.")
+                   "by incorrect BLAS library being linked in, or by mixing "
+                   "package managers (pip, conda, apt, ...). Search closed "
+                   "numpy issues for similar problems.")
             raise RuntimeError(msg.format(__file__))
 
     _sanity_check()

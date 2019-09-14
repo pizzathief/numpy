@@ -1,15 +1,17 @@
-===========================================================
-A dispatch mechanism for NumPy's high level array functions
-===========================================================
+====================================================================
+NEP 18 — A dispatch mechanism for NumPy's high level array functions
+====================================================================
 
 :Author: Stephan Hoyer <shoyer@google.com>
 :Author: Matthew Rocklin <mrocklin@gmail.com>
 :Author: Marten van Kerkwijk <mhvk@astro.utoronto.ca>
 :Author: Hameer Abbasi <hameerabbasi@yahoo.com>
 :Author: Eric Wieser <wieser.eric@gmail.com>
-:Status: Draft
+:Status: Provisional
 :Type: Standards Track
 :Created: 2018-05-29
+:Updated: 2019-05-25
+:Resolution: https://mail.python.org/pipermail/numpy-discussion/2018-August/078493.html
 
 Abstact
 -------
@@ -84,6 +86,28 @@ instance and method.
 A prototype implementation can be found in
 `this notebook <https://nbviewer.jupyter.org/gist/shoyer/1f0a308a06cd96df20879a1ddb8f0006>`_.
 
+.. warning::
+
+  The ``__array_function__`` protocol, and its use on particular functions,
+  is *experimental*. We plan to retain an interface that makes it possible
+  to override NumPy functions, but the way to do so for particular functions
+  **can and will change** with little warning. If such reduced backwards
+  compatibility guarantees are not accepted to you, do not rely upon overrides
+  of NumPy functions for non-NumPy arrays. See "Non-goals" below for more
+  details.
+
+.. note::
+
+  Dispatch with the ``__array_function__`` protocol has been implemented but is
+  not yet enabled by default:
+
+  - In NumPy 1.16, you need to set the environment variable
+    ``NUMPY_EXPERIMENTAL_ARRAY_FUNCTION=1`` before importing NumPy to test
+    NumPy function overrides.
+  - In NumPy 1.17, the protocol will be enabled by default, but can be disabled
+    with ``NUMPY_EXPERIMENTAL_ARRAY_FUNCTION=0``.
+  - Eventually, expect to ``__array_function__`` to always be enabled.
+
 The interface
 ~~~~~~~~~~~~~
 
@@ -96,8 +120,9 @@ We propose the following signature for implementations of
 
 -  ``func`` is an arbitrary callable exposed by NumPy's public API,
    which was called in the form ``func(*args, **kwargs)``.
--  ``types`` is a ``frozenset`` of unique argument types from the original NumPy
-   function call that implement ``__array_function__``.
+-  ``types`` is a `collection <https://docs.python.org/3/library/collections.abc.html#collections.abc.Collection>`_
+   of unique argument types from the original NumPy function call that
+   implement ``__array_function__``.
 -  The tuple ``args`` and dict ``kwargs`` are directly passed on from the
    original call.
 
@@ -107,12 +132,14 @@ implementing the array API.
 
 As a convenience for ``__array_function__`` implementors, ``types`` provides all
 argument types with an ``'__array_function__'`` attribute. This
-allows downstream implementations to quickly determine if they are likely able
-to support the operation. A ``frozenset`` is used to ensure that
-``__array_function__`` implementations cannot rely on the iteration order of
-``types``, which would facilitate violating the well-defined "Type casting
-hierarchy" described in
-`NEP-13 <https://www.numpy.org/neps/nep-0013-ufunc-overrides.html>`_.
+allows implementors to quickly identify cases where they should defer to
+``__array_function__`` implementations on other arguments.
+The type of ``types`` is intentionally vague:
+``frozenset`` would most closely match intended use, but we may use ``tuple``
+instead for performance reasons. In any case, ``__array_function__``
+implementations should not rely on the iteration order of ``types``, which
+would violate a well-defined "Type casting hierarchy" (as described in
+`NEP-13 <https://www.numpy.org/neps/nep-0013-ufunc-overrides.html>`_).
 
 Example for a project implementing the NumPy API
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -175,6 +202,14 @@ include *all* of the corresponding NumPy function's optional arguments
 (e.g., ``broadcast_to`` above omits the irrelevant ``subok`` argument).
 Optional arguments are only passed in to ``__array_function__`` if they
 were explicitly used in the NumPy function call.
+
+.. note::
+
+    Just like the case for builtin special methods like ``__add__``, properly
+    written ``__array_function__`` methods should always return
+    ``NotImplemented`` when an unknown type is encountered. Otherwise, it will
+    be impossible to correctly override NumPy functions from another object
+    if the operation also includes one of your objects.
 
 Necessary changes within the NumPy codebase itself
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -277,6 +312,13 @@ In particular:
 -  If all ``__array_function__`` methods return ``NotImplemented``,
    NumPy will raise ``TypeError``.
 
+If no ``__array_function__`` methods exist, NumPy will default to calling its
+own implementation, intended for use on NumPy arrays. This case arises, for
+example, when all array-like arguments are Python numbers or lists.
+(NumPy arrays do have a ``__array_function__`` method, given below, but it
+always returns ``NotImplemented`` if any argument other than a NumPy array
+subclass implements ``__array_function__``.)
+
 One deviation from the current behavior of ``__array_ufunc__`` is that NumPy
 will only call ``__array_function__`` on the *first* argument of each unique
 type. This matches Python's
@@ -287,67 +329,83 @@ between these two dispatch protocols, we should
 `also update <https://github.com/numpy/numpy/issues/11306>`_
 ``__array_ufunc__`` to match this behavior.
 
-Special handling of ``numpy.ndarray``
-'''''''''''''''''''''''''''''''''''''
+The ``__array_function__`` method on ``numpy.ndarray``
+''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
 The use cases for subclasses with ``__array_function__`` are the same as those
-with ``__array_ufunc__``, so ``numpy.ndarray`` should also define a
-``__array_function__`` method mirroring ``ndarray.__array_ufunc__``:
+with ``__array_ufunc__``, so ``numpy.ndarray`` also defines a
+``__array_function__`` method:
 
 .. code:: python
 
     def __array_function__(self, func, types, args, kwargs):
-        # Cannot handle items that have __array_function__ other than our own.
-        for t in types:
-            if (hasattr(t, '__array_function__') and
-                    t.__array_function__ is not ndarray.__array_function__):
-                return NotImplemented
+        if not all(issubclass(t, ndarray) for t in types):
+            # Defer to any non-subclasses that implement __array_function__
+            return NotImplemented
 
-        # Arguments contain no overrides, so we can safely call the
-        # overloaded function again.
-        return func(*args, **kwargs)
+        # Use NumPy's private implementation without __array_function__
+        # dispatching
+        return func._implementation(*args, **kwargs)
 
-To avoid infinite recursion, the dispatch rules for ``__array_function__`` need
-also the same special case they have for ``__array_ufunc__``: any arguments with
-an ``__array_function__`` method that is identical to
-``numpy.ndarray.__array_function__`` are not be called as
-``__array_function__`` implementations.
+This method matches NumPy's dispatching rules, so for most part it is
+possible to pretend that ``ndarray.__array_function__`` does not exist.
+The private ``_implementation`` attribute, defined below in the
+``array_function_dispatch`` decorator, allows us to avoid the special cases for
+NumPy arrays that were needed in the ``__array_ufunc__`` protocol.
+
+The ``__array_function__`` protocol always calls subclasses before
+superclasses, so if any ``ndarray`` subclasses are involved in an operation,
+they will get the chance to override it, just as if any other argument
+overrides ``__array_function__``. But the default behavior in an operation
+that combines a base NumPy array and a subclass is different: if the subclass
+returns ``NotImplemented``, NumPy's implementation of the function will be
+called instead of raising an exception. This is appropriate since subclasses
+are `expected to be substitutable <https://en.wikipedia.org/wiki/Liskov_substitution_principle>`_.
+
+We still caution authors of subclasses to exercise caution when relying
+upon details of NumPy's internal implementations. It is not always possible to
+write a perfectly substitutable ndarray subclass, e.g., in cases involving the
+creation of new arrays, not least because NumPy makes use of internal
+optimizations specialized to base NumPy arrays, e.g., code written in C. Even
+if NumPy's implementation happens to work today, it may not work in the future.
+In these cases, your recourse is to re-implement top-level NumPy functions via
+``__array_function__`` on your subclass.
 
 Changes within NumPy functions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Given a function defining the above behavior, for now call it
-``try_array_function_override``, we now need to call that function from
-within every relevant NumPy function. This is a pervasive change, but of
-fairly simple and innocuous code that should complete quickly and
+``implement_array_function``, we now need to call that
+function from within every relevant NumPy function. This is a pervasive change,
+but of fairly simple and innocuous code that should complete quickly and
 without effect if no arguments implement the ``__array_function__``
 protocol.
 
-In most cases, these functions should written using the
-``array_function_dispatch`` decorator, which also associates dispatcher
-functions:
+To achieve this, we define a ``array_function_dispatch`` decorator to rewrite
+NumPy functions. The basic implementation is as follows:
 
 .. code:: python
 
-    def array_function_dispatch(dispatcher):
+    def array_function_dispatch(dispatcher, module=None):
         """Wrap a function for dispatch with the __array_function__ protocol."""
-        def decorator(func):
-            @functools.wraps(func)
-            def new_func(*args, **kwargs):
-                relevant_arguments = dispatcher(*args, **kwargs)
-                success, value = try_array_function_override(
-                    new_func, relevant_arguments, args, kwargs)
-                if success:
-                    return value
-                return func(*args, **kwargs)
-            return new_func
+        def decorator(implementation):
+            @functools.wraps(implementation)
+            def public_api(*args, **kwargs):
+                relevant_args = dispatcher(*args, **kwargs)
+                return implement_array_function(
+                    implementation, public_api, relevant_args, args, kwargs)
+            if module is not None:
+                public_api.__module__ = module
+            # for ndarray.__array_function__
+            public_api._implementation = implementation
+            return public_api
         return decorator
 
     # example usage
-    def _broadcast_to_dispatcher(array, shape, subok=None, **ignored_kwargs):
+    def _broadcast_to_dispatcher(array, shape, subok=None):
         return (array,)
 
-    @array_function_dispatch(_broadcast_to_dispatcher)
+    @array_function_dispatch(_broadcast_to_dispatcher, module='numpy')
     def broadcast_to(array, shape, subok=False):
         ...  # existing definition of np.broadcast_to
 
@@ -365,37 +423,47 @@ It's particularly worth calling out the decorator's use of
   the wrapped NumPy function.
 - On Python 3, it also ensures that the decorator function copies the original
   function signature, which is important for introspection based tools such as
-  auto-complete. If we care about preserving function signatures on Python 2,
-  for the `short while longer <http://www.numpy.org/neps/nep-0014-dropping-python2.7-proposal.html>`_
-  that NumPy supports Python 2.7, we do could do so by adding a vendored
-  dependency on the (single-file, BSD licensed)
-  `decorator library <https://github.com/micheles/decorator>`_.
+  auto-complete.
 - Finally, it ensures that the wrapped function
   `can be pickled <http://gael-varoquaux.info/programming/decoration-in-python-done-right-decorating-and-pickling.html>`_.
 
-In a few cases, it would not make sense to use the ``array_function_dispatch``
-decorator directly, but override implementation in terms of
-``try_array_function_override`` should still be straightforward.
+The example usage illustrates several best practices for writing dispatchers
+relevant to NumPy contributors:
 
-- Functions written entirely in C (e.g., ``np.concatenate``) can't use
-  decorators, but they could still use a C equivalent of
-  ``try_array_function_override``. If performance is not a concern, they could
-  also be easily wrapped with a small Python wrapper.
-- The ``__call__`` method of ``np.vectorize`` can't be decorated with
-  ``@array_function_dispatch``, because we should pass a ``vectorize`` object
-  itself as the ``func`` argument  ``__array_function__``, not the unbound
-  ``vectorize.__call__`` method.
-- ``np.einsum`` does complicated argument parsing to handle two different
-  function signatures. It would probably be best to avoid the overhead of
-  parsing it twice in the typical case of no overrides.
+- We passed the ``module`` argument, which in turn sets the  ``__module__``
+  attribute on the generated function. This is for the benefit of better error
+  messages, here for errors raised internally by NumPy when no implementation
+  is found, e.g.,
+  ``TypeError: no implementation found for 'numpy.broadcast_to'``. Setting
+  ``__module__`` to the canonical location in NumPy's public API encourages
+  users to use NumPy's public API for identifying functions in
+  ``__array_function__``.
 
-Fortunately, in each of these cases so far, the functions already has a generic
-signature of the form ``*args, **kwargs``, which means we don't need to worry
-about potential inconsistency between how functions are called and what we pass
-to ``__array_function__``. (In C, arguments for all Python functions are parsed
-from a tuple ``*args`` and dict ``**kwargs``.) This shouldn't stop us from
-writing overrides for functions with non-generic signatures that can't use the
-decorator, but we should consider these cases carefully.
+- The dispatcher is a function that returns a tuple, rather than an equivalent
+  (and equally valid) generator using ``yield``:
+
+  .. code:: python
+
+    # example usage
+    def broadcast_to(array, shape, subok=None):
+        yield array
+
+  This is no accident: NumPy's implementation of dispatch for
+  ``__array_function__`` is fastest when dispatcher functions return a builtin
+  sequence type (``tuple`` or ``list``).
+
+  On a related note, it's perfectly fine for dispatchers to return arguments
+  even if in some cases you *know* that they cannot have an
+  ``__array_function__`` method. This can arise for functions with default
+  arguments (e.g., ``None``) or complex signatures. NumPy's dispatching logic
+  sorts out these cases very quickly, so it generally is not worth the trouble
+  of parsing them on your own.
+
+.. note::
+
+    The code for ``array_function_dispatch`` above has been updated from the
+    original version of this NEP to match the actual
+    `implementation in NumPy <https://github.com/numpy/numpy/blob/e104f03ac8f65ae5b92a9b413b0fa639f39e6de2/numpy/core/overrides.py>`_.
 
 Extensibility
 ~~~~~~~~~~~~~
@@ -404,10 +472,10 @@ An important virtue of this approach is that it allows for adding new
 optional arguments to NumPy functions without breaking code that already
 relies on ``__array_function__``.
 
-This is not a theoretical concern. The implementation of overrides *within*
-functions like ``np.sum()`` rather than defining a new function capturing
-``*args`` and ``**kwargs`` necessitated some awkward gymnastics to ensure that
-the new ``keepdims`` argument is only passed in cases where it is used, e.g.,
+This is not a theoretical concern. NumPy's older, haphazard implementation of
+overrides *within* functions like ``np.sum()`` necessitated some awkward
+gymnastics when we decided to add new optional arguments, e.g., the new
+``keepdims`` argument is only passed in cases where it is used:
 
 .. code:: python
 
@@ -417,11 +485,12 @@ the new ``keepdims`` argument is only passed in cases where it is used, e.g.,
             kwargs['keepdims'] = keepdims
         return array.sum(..., **kwargs)
 
-This also makes it possible to add optional arguments to ``__array_function__``
-implementations incrementally and only in cases where it makes sense. For
-example, a library implementing immutable arrays would not be required to
-explicitly include an unsupported ``out`` argument. Doing this properly for all
-optional arguments is somewhat onerous, e.g.,
+For ``__array_function__`` implementors, this also means that it is possible
+to implement even existing optional arguments incrementally, and only in cases
+where it makes sense. For example, a library implementing immutable arrays
+would not be required to explicitly include an unsupported ``out`` argument in
+the function signature. This can be somewhat onerous to implement properly,
+e.g.,
 
 .. code:: python
 
@@ -453,10 +522,10 @@ the difference in speed between the ``ndarray.sum()`` method (1.6 us) and
 ``numpy.sum()`` function (2.6 us).
 
 Fortunately, we expect significantly less overhead with a C implementation of
-``try_array_function_override``, which is where the bulk of the runtime is.
-This would leave the ``array_function_dispatch`` decorator and dispatcher
-function on their own adding about 0.5 microseconds of overhead, for perhaps ~1
-microsecond of overhead in the typical case.
+``implement_array_function``, which is where the bulk of the
+runtime is. This would leave the ``array_function_dispatch`` decorator and
+dispatcher function on their own adding about 0.5 microseconds of overhead,
+for perhaps ~1 microsecond of overhead in the typical case.
 
 In our view, this level of overhead is reasonable to accept for code written
 in Python. We're pretty sure that the vast majority of NumPy users aren't
@@ -481,7 +550,7 @@ already wrap a limited subset of SciPy functionality (e.g.,
 
 If we want to do this, we should expose at least the decorator
 ``array_function_dispatch()`` and possibly also the lower level
-``try_array_function_override()`` as part of NumPy's public API.
+``implement_array_function()`` as part of NumPy's public API.
 
 Non-goals
 ---------
@@ -497,7 +566,10 @@ wait for an optimal implementation. The price of moving fast is that for
 now **this protocol should be considered strictly experimental**. We
 reserve the right to change the details of this protocol and how
 specific NumPy functions use it at any time in the future -- even in
-otherwise bug-fix only releases of NumPy.
+otherwise bug-fix only releases of NumPy. In practice, once initial
+issues with ``__array_function__`` are worked out, we will use abbreviated
+deprecation cycles as short as a single major NumPy release (e.g., as
+little as four months).
 
 In particular, we don't plan to write additional NEPs that list all
 specific functions to overload, with exactly how they should be
@@ -515,18 +587,20 @@ own protocols:
 -  dispatch for methods of any kind, e.g., methods on
    ``np.random.RandomState`` objects.
 
-As a concrete example of how we expect to break behavior in the future,
-some functions such as ``np.where`` are currently not NumPy universal
-functions, but conceivably could become universal functions in the
-future. When/if this happens, we will change such overloads from using
-``__array_function__`` to the more specialized ``__array_ufunc__``.
+We also expect that the mechanism for overriding specific functions
+that will initially use the ``__array_function__`` protocol can and will
+change in the future. As a concrete example of how we expect to break
+behavior in the future, some functions such as ``np.where`` are currently
+not NumPy universal functions, but conceivably could become universal
+functions in the future. When/if this happens, we will change such overloads
+from using ``__array_function__`` to the more specialized ``__array_ufunc__``.
 
 
 Backward compatibility
 ----------------------
 
 This proposal does not change existing semantics, except for those arguments
-that currently have ``__array_function__`` methods, which should be rare.
+that currently have ``__array_function__`` attributes, which should be rare.
 
 
 Alternatives
@@ -543,6 +617,17 @@ with ``__array_function__`` should switch to a new protocol instead,
 that is explicitly OK for as long as ``__array_function__`` retains its
 experimental status.
 
+Switching to a new protocol should use an abbreviated version of NumPy's
+normal deprecation cycle:
+
+- For a single major release, after checking for any new protocols, NumPy
+  should still check for ``__array_function__`` methods that implement the
+  given function. If any argument returns a value other than
+  ``NotImplemented`` from ``__array_function__``, a descriptive
+  ``FutureWarning`` should be issued.
+- In the next major release, the checks for ``__array_function__`` will be
+  removed.
+
 Separate namespace
 ~~~~~~~~~~~~~~~~~~
 
@@ -557,7 +642,7 @@ layer, separating NumPy's high level API from default implementations on
 
 The downsides are that this would require an explicit opt-in from all
 existing code, e.g., ``import numpy.api as np``, and in the long term
-would result in the maintainence of two separate NumPy APIs. Also, many
+would result in the maintenance of two separate NumPy APIs. Also, many
 functions from ``numpy`` itself are already overloaded (but
 inadequately), so confusion about high vs. low level APIs in NumPy would
 still persist.
@@ -593,7 +678,7 @@ would be straightforward to write a shim for a default
 Implementations in terms of a limited core API
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The internal implementations of some NumPy functions is extremely simple.
+The internal implementation of some NumPy functions is extremely simple.
 For example:
 
 - ``np.stack()`` is implemented in only a few lines of code by combining
@@ -631,8 +716,8 @@ However, to work well this would require the possibility of implementing
 *some* but not all functions with ``__array_function__``, e.g., as described
 in the next section.
 
-Coercion to a NumPy array as a catch-all fallback
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Partial implementation of NumPy's API
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 With the current design, classes that implement ``__array_function__``
 to overload at least one function implicitly declare an intent to
@@ -649,44 +734,64 @@ that assuredly many pandas users rely on. If pandas implemented
 functions like ``np.nanmean`` would suddenly break on pandas objects by
 raising TypeError.
 
+Even libraries that reimplement most of NumPy's public API sometimes rely upon
+using utility functions from NumPy without a wrapper. For example, both CuPy
+and JAX simply `use an alias <https://github.com/numpy/numpy/issues/12974>`_ to
+``np.result_type``, which already supports duck-types with a ``dtype``
+attribute.
+
 With ``__array_ufunc__``, it's possible to alleviate this concern by
 casting all arguments to numpy arrays and re-calling the ufunc, but the
 heterogeneous function signatures supported by ``__array_function__``
 make it impossible to implement this generic fallback behavior for
 ``__array_function__``.
 
-We could resolve this issue by change the handling of return values in
-``__array_function__`` in either of two possible ways:
+We considered three possible ways to resolve this issue, but none were
+entirely satisfactory:
 
-1. Change the meaning of all arguments returning ``NotImplemented`` to indicate
-   that all arguments should be coerced to NumPy arrays and the operation
-   should be retried. However, many array libraries (e.g., scipy.sparse) really
-   don't want implicit conversions to NumPy arrays, and often avoid implementing
-   ``__array__`` for exactly this reason. Implicit conversions can result in
-   silent bugs and performance degradation.
+1. Change the meaning of all arguments returning ``NotImplemented`` from
+   ``__array_function__`` to indicate that all arguments should be coerced to
+   NumPy arrays and the operation should be retried. However, many array
+   libraries (e.g., scipy.sparse) really don't want implicit conversions to
+   NumPy arrays, and often avoid implementing ``__array__`` for exactly this
+   reason. Implicit conversions can result in silent bugs and performance
+   degradation.
 
    Potentially, we could enable this behavior only for types that implement
    ``__array__``, which would resolve the most problematic cases like
    scipy.sparse. But in practice, a large fraction of classes that present a
    high level API like NumPy arrays already implement ``__array__``. This would
    preclude reliable use of NumPy's high level API on these objects.
+
 2. Use another sentinel value of some sort, e.g.,
-   ``np.NotImplementedButCoercible``, to indicate that a class implementing part
-   of NumPy's higher level array API is coercible as a fallback. This is a more
-   appealing option.
+   ``np.NotImplementedButCoercible``, to indicate that a class implementing
+   part of NumPy's higher level array API is coercible as a fallback. If all
+   arguments return ``NotImplementedButCoercible``, arguments would be coerced
+   and the operation would be retried.
 
-With either approach, we would need to define additional rules for *how*
-coercible array arguments are coerced. The only sane rule would be to treat
-these return values as equivalent to not defining an
-``__array_function__`` method at all, which means that NumPy functions would
-fall-back to their current behavior of coercing all array-like arguments.
+   Unfortunately, correct behavior after encountering
+   ``NotImplementedButCoercible`` is not always obvious. Particularly
+   challenging is the "mixed" case where some arguments return
+   ``NotImplementedButCoercible`` and others return ``NotImplemented``.
+   Would dispatching be retried after only coercing the "coercible" arguments?
+   If so, then conceivably we could end up looping through the dispatching
+   logic an arbitrary number of times. Either way, the dispatching rules would
+   definitely get more complex and harder to reason about.
 
-It is not yet clear to us yet if we need an optional like
-``NotImplementedButCoercible``, so for now we propose to defer this issue.
-We can always implement ``np.NotImplementedButCoercible`` at some later time if
-it proves critical to the NumPy community in the future. Importantly, we don't
-think this will stop critical libraries that desire to implement most of the
-high level NumPy API from adopting this proposal.
+3. Allow access to NumPy's implementation of functions, e.g., in the form of
+   a publicly exposed ``__skip_array_function__`` attribute on the NumPy
+   functions. This would allow for falling back to NumPy's implementation by
+   using ``func.__skip_array_function__`` inside ``__array_function__``
+   methods, and could also potentially be used to be used to avoid the
+   overhead of dispatching. However, it runs the risk of potentially exposing
+   details of NumPy's implementations for NumPy functions that do not call
+   ``np.asarray()`` internally. See
+   `this note <https://mail.python.org/pipermail/numpy-discussion/2019-May/079541.html>`_
+   for a summary of the full discussion.
+
+These solutions would solve real use cases, but at the cost of additional
+complexity. We would like to gain experience with how ``__array_function__`` is
+actually used before making decisions that would be difficult to roll back.
 
 A magic decorator that inspects type annotations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -769,9 +874,9 @@ public API.
 
 ``types`` is included because we can compute it almost for free as part of
 collecting ``__array_function__`` implementations to call in
-``try_array_function_override``. We also think it will be used by most
-``__array_function__`` methods, which otherwise would need to extract this
-information themselves. It would be equivalently easy to provide single
+``implement_array_function``. We also think it will be used
+by many ``__array_function__`` methods, which otherwise would need to extract
+this information themselves. It would be equivalently easy to provide single
 instances of each type, but providing only types seemed cleaner.
 
 Taking this even further, it was suggested that ``__array_function__`` should be
@@ -782,10 +887,10 @@ worth breaking from the precedence of ``__array_ufunc__``.
 There are two other arguments that we think *might* be important to pass to
 ``__array_ufunc__`` implementations:
 
-- Access to the non-dispatched function (i.e., before wrapping with
+- Access to the non-dispatched implementation (i.e., before wrapping with
   ``array_function_dispatch``) in ``ndarray.__array_function__`` would allow
-  use to drop special case logic for that method from
-  ``try_array_function_override``.
+  us to drop special case logic for that method from
+  ``implement_array_function``.
 - Access to the ``dispatcher`` function passed into
   ``array_function_dispatch()`` would allow ``__array_function__``
   implementations to determine the list of "array-like" arguments in a generic
@@ -798,6 +903,31 @@ We have left these out for now, because we don't know that they are necessary.
 If we want to include them in the future, the easiest way to do so would be to
 update the ``array_function_dispatch`` decorator to add them as function
 attributes.
+
+Callable objects generated at runtime
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+NumPy has some APIs that define callable objects *dynamically*, such as
+``vectorize`` and methods on ``random.RandomState`` object. Examples can
+also be found in other core libraries in the scientific Python stack, e.g.,
+distribution objects in scipy.stats and model objects in scikit-learn. It would
+be nice to be able to write overloads for such callables, too. This presents a
+challenge for the ``__array_function__`` protocol, because unlike the case for
+functions there is no public object in the ``numpy`` namespace to pass into
+the ``func`` argument.
+
+We could potentially handle this by establishing an alternative convention
+for how the ``func`` argument could be inspected, e.g., by using
+``func.__self__`` to obtain the class object and ``func.__func__`` to return
+the unbound function object. However, some caution is in order, because
+this would immesh what are currently implementation details as a permanent
+features of the interface, such as the fact that ``vectorize`` is implemented as a
+class rather than closure, or whether a method is implemented directly or using
+a descriptor.
+
+Given the complexity and the limited use cases, we are also deferring on this
+issue for now, but we are confident that ``__array_function__`` could be
+expanded to accommodate these use cases in the future if need be.
 
 Discussion
 ----------
@@ -814,7 +944,7 @@ it was discussed at a `NumPy developer sprint
 Berkeley Institute for Data Science (BIDS) <https://bids.berkeley.edu/>`_.
 
 Detailed discussion of this proposal itself can be found on the
-`the mailing list <https://mail.python.org/pipermail/numpy-discussion/2018-June/078127.html>`_ and relvant pull requests
+`the mailing list <https://mail.python.org/pipermail/numpy-discussion/2018-June/078127.html>`_ and relevant pull requests
 (`1 <https://github.com/numpy/numpy/pull/11189>`_,
 `2 <https://github.com/numpy/numpy/pull/11303#issuecomment-396638175>`_,
 `3 <https://github.com/numpy/numpy/pull/11374>`_)
