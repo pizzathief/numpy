@@ -1,7 +1,8 @@
-#define _UMATHMODULE
-#define _MULTIARRAYMODULE
 #define NPY_NO_DEPRECATED_API NPY_API_VERSION
+#define _MULTIARRAYMODULE
+#define _UMATHMODULE
 
+#define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
 #include "npy_config.h"
@@ -109,8 +110,8 @@ _error_handler(int method, PyObject *errobj, char *errtype, int retstatus, int *
                     errtype, name);
             goto fail;
         }
-        args = Py_BuildValue("NN", PyUString_FromString(errtype),
-                PyInt_FromLong((long) retstatus));
+        args = Py_BuildValue("NN", PyUnicode_FromString(errtype),
+                PyLong_FromLong((long) retstatus));
         if (args == NULL) {
             goto fail;
         }
@@ -165,7 +166,7 @@ get_global_ext_obj(void)
         if (thedict == NULL) {
             thedict = PyEval_GetBuiltins();
         }
-        ref = PyDict_GetItem(thedict, npy_um_str_pyvals_name);
+        ref = PyDict_GetItemWithError(thedict, npy_um_str_pyvals_name);
 #if USE_USE_DEFAULTS==1
     }
 #endif
@@ -212,7 +213,7 @@ _extract_pyvals(PyObject *ref, const char *name, int *bufsize,
     }
 
     if (bufsize != NULL) {
-        *bufsize = PyInt_AsLong(PyList_GET_ITEM(ref, 0));
+        *bufsize = PyLong_AsLong(PyList_GET_ITEM(ref, 0));
         if (error_converting(*bufsize)) {
             return -1;
         }
@@ -229,7 +230,7 @@ _extract_pyvals(PyObject *ref, const char *name, int *bufsize,
     }
 
     if (errmask != NULL) {
-        *errmask = PyInt_AsLong(PyList_GET_ITEM(ref, 1));
+        *errmask = PyLong_AsLong(PyList_GET_ITEM(ref, 1));
         if (*errmask < 0) {
             if (PyErr_Occurred()) {
                 return -1;
@@ -266,6 +267,33 @@ _extract_pyvals(PyObject *ref, const char *name, int *bufsize,
 }
 
 /*
+ * Handler which uses the default `np.errstate` given that `fpe_errors` is
+ * already set.  `fpe_errors` is typically the (nonzero) result of
+ * `npy_get_floatstatus_barrier`.
+ *
+ * Returns -1 on failure (an error was raised) and 0 on success.
+ */
+NPY_NO_EXPORT int
+PyUFunc_GiveFloatingpointErrors(const char *name, int fpe_errors)
+{
+    int bufsize, errmask;
+    PyObject *errobj;
+
+    if (PyUFunc_GetPyValues((char *)name, &bufsize, &errmask,
+                            &errobj) < 0) {
+        return -1;
+    }
+    int first = 1;
+    if (PyUFunc_handlefperr(errmask, errobj, fpe_errors, &first)) {
+        Py_XDECREF(errobj);
+        return -1;
+    }
+    Py_XDECREF(errobj);
+    return 0;
+}
+
+
+/*
  * check the floating point status
  *  - errmask: mask of status to check
  *  - extobj: ufunc pyvals object
@@ -290,6 +318,9 @@ _check_ufunc_fperr(int errmask, PyObject *extobj, const char *ufunc_name) {
     /* Get error object globals */
     if (extobj == NULL) {
         extobj = get_global_ext_obj();
+        if (extobj == NULL && PyErr_Occurred()) {
+            return -1;
+        }
     }
     if (_extract_pyvals(extobj, ufunc_name,
                         NULL, NULL, &errobj) < 0) {
@@ -311,6 +342,9 @@ _get_bufsize_errmask(PyObject * extobj, const char *ufunc_name,
     /* Get the buffersize and errormask */
     if (extobj == NULL) {
         extobj = get_global_ext_obj();
+        if (extobj == NULL && PyErr_Occurred()) {
+            return -1;
+        }
     }
     if (_extract_pyvals(extobj, ufunc_name,
                         buffersize, errormask, NULL) < 0) {

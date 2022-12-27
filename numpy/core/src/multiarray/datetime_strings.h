@@ -1,5 +1,5 @@
-#ifndef _NPY_PRIVATE__DATETIME_STRINGS_H_
-#define _NPY_PRIVATE__DATETIME_STRINGS_H_
+#ifndef NUMPY_CORE_SRC_MULTIARRAY_DATETIME_STRINGS_H_
+#define NUMPY_CORE_SRC_MULTIARRAY_DATETIME_STRINGS_H_
 
 /*
  * Parses (almost) standard ISO 8601 date strings. The differences are:
@@ -33,7 +33,7 @@
  * Returns 0 on success, -1 on failure.
  */
 NPY_NO_EXPORT int
-parse_iso_8601_datetime(char *str, Py_ssize_t len,
+parse_iso_8601_datetime(char const *str, Py_ssize_t len,
                     NPY_DATETIMEUNIT unit,
                     NPY_CASTING casting,
                     npy_datetimestruct *out,
@@ -81,4 +81,4 @@ NPY_NO_EXPORT PyObject *
 array_datetime_as_string(PyObject *NPY_UNUSED(self), PyObject *args,
                                 PyObject *kwds);
 
-#endif
+#endif  /* NUMPY_CORE_SRC_MULTIARRAY_DATETIME_STRINGS_H_ */

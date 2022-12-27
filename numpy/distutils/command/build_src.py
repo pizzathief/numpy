@@ -1,7 +1,5 @@
 """ Build swig and f2py sources.
 """
-from __future__ import division, absolute_import, print_function
-
 import os
 import re
 import sys
@@ -53,9 +51,12 @@ class build_src(build_ext.build_ext):
         ('inplace', 'i',
          "ignore build-lib and put compiled extensions into the source " +
          "directory alongside your pure Python modules"),
+        ('verbose-cfg', None,
+         "change logging level from WARN to INFO which will show all " +
+         "compiler output")
         ]
 
-    boolean_options = ['force', 'inplace']
+    boolean_options = ['force', 'inplace', 'verbose-cfg']
 
     help_options = []
 
@@ -76,6 +77,7 @@ class build_src(build_ext.build_ext):
         self.swig_opts = None
         self.swig_cpp = None
         self.swig = None
+        self.verbose_cfg = None
 
     def finalize_options(self):
         self.set_undefined_options('build',
@@ -365,6 +367,13 @@ class build_src(build_ext.build_ext):
             build_dir = os.path.join(*([self.build_src]
                                        +name.split('.')[:-1]))
         self.mkpath(build_dir)
+
+        if self.verbose_cfg:
+            new_level = log.INFO
+        else:
+            new_level = log.WARN
+        old_level = log.set_threshold(new_level)
+
         for func in func_sources:
             source = func(extension, build_dir)
             if not source:
@@ -375,7 +384,7 @@ class build_src(build_ext.build_ext):
             else:
                 log.info("  adding '%s' to sources." % (source,))
                 new_sources.append(source)
-
+        log.set_threshold(old_level)
         return new_sources
 
     def filter_py_files(self, sources):
@@ -706,14 +715,14 @@ class build_src(build_ext.build_ext):
 
         return new_sources + py_files
 
-_f_pyf_ext_match = re.compile(r'.*[.](f90|f95|f77|for|ftn|f|pyf)\Z', re.I).match
-_header_ext_match = re.compile(r'.*[.](inc|h|hpp)\Z', re.I).match
+_f_pyf_ext_match = re.compile(r'.*\.(f90|f95|f77|for|ftn|f|pyf)\Z', re.I).match
+_header_ext_match = re.compile(r'.*\.(inc|h|hpp)\Z', re.I).match
 
 #### SWIG related auxiliary functions ####
 _swig_module_name_match = re.compile(r'\s*%module\s*(.*\(\s*package\s*=\s*"(?P<package>[\w_]+)".*\)|)\s*(?P<name>[\w_]+)',
                                      re.I).match
-_has_c_header = re.compile(r'-[*]-\s*c\s*-[*]-', re.I).search
-_has_cpp_header = re.compile(r'-[*]-\s*c[+][+]\s*-[*]-', re.I).search
+_has_c_header = re.compile(r'-\*-\s*c\s*-\*-', re.I).search
+_has_cpp_header = re.compile(r'-\*-\s*c\+\+\s*-\*-', re.I).search
 
 def get_swig_target(source):
     with open(source, 'r') as f:

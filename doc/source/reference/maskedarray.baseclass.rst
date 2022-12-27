@@ -1,5 +1,7 @@
 .. currentmodule:: numpy.ma
 
+.. for doctests
+   >>> from numpy import ma
 
 .. _numpy.ma.constants:
 
@@ -21,25 +23,26 @@ defines several constants.
       True
       >>> x[-1] = ma.masked
       >>> x
-      masked_array(data = [1 -- --],
-                   mask = [False  True  True],
-             fill_value = 999999)
+      masked_array(data=[1, --, --],
+                   mask=[False,  True,  True],
+             fill_value=999999)
 
 
 .. data:: nomask
 
    Value indicating that a masked array has no invalid entry.
    :attr:`nomask` is used internally to speed up computations when the mask
-   is not needed.
+   is not needed. It is represented internally as ``np.False_``.
 
 
-.. data:: masked_print_options
+.. data:: masked_print_option
 
    String used in lieu of missing data when a masked array is printed.
    By default, this string is ``'--'``.
 
-
-
+   Use ``set_display()`` to change the default string.
+   Example usage: ``numpy.ma.masked_print_option.set_display('X')`` 
+   replaces missing data with ``'X'``.
 
 .. _maskedarray.baseclass:
 
@@ -122,7 +125,6 @@ Conversion
 
    MaskedArray.__float__
    MaskedArray.__int__
-   MaskedArray.__long__
 
    MaskedArray.view
    MaskedArray.astype
@@ -160,9 +162,9 @@ replaced with ``n`` integers which will be interpreted as an n-tuple.
 Item selection and manipulation
 -------------------------------
 
-For array methods that take an *axis* keyword, it defaults to `None`.
-If axis is *None*, then the array is treated as a 1-D array.
-Any other value for *axis* represents the dimension along which
+For array methods that take an ``axis`` keyword, it defaults to None.
+If axis is None, then the array is treated as a 1-D array.
+Any other value for ``axis`` represents the dimension along which
 the operation should proceed.
 
 .. autosummary::
@@ -240,8 +242,8 @@ Comparison operators:
    MaskedArray.__eq__
    MaskedArray.__ne__
 
-Truth value of an array (:func:`bool()`):
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Truth value of an array (:class:`bool() <bool>`):
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autosummary::
    :toctree: generated/

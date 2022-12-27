@@ -1,13 +1,12 @@
-from __future__ import division, absolute_import, print_function
-
 __all__ = ['matrix', 'bmat', 'mat', 'asmatrix']
 
 import sys
 import warnings
 import ast
+
+from .._utils import set_module
 import numpy.core.numeric as N
 from numpy.core.numeric import concatenate, isscalar
-from numpy.core.overrides import set_module
 # While not in __all__, matrix_power used to be defined here, so we import
 # it for backward compatibility.
 from numpy.linalg import matrix_power
@@ -331,7 +330,7 @@ class matrix(N.ndarray):
         Parameters
         ----------
         axis : None or int or tuple of ints, optional
-            Selects a subset of the single-dimensional entries in the shape.
+            Selects a subset of the axes of length one in the shape.
             If an axis is selected with shape entry greater than one,
             an error is raised.
 
@@ -804,7 +803,7 @@ class matrix(N.ndarray):
         -------
         ret : matrix object
             If `self` is non-singular, `ret` is such that ``ret * self`` ==
-            ``self * ret`` == ``np.matrix(np.eye(self[0,:].size)`` all return
+            ``self * ret`` == ``np.matrix(np.eye(self[0,:].size))`` all return
             ``True``.
 
         Raises
@@ -831,9 +830,9 @@ class matrix(N.ndarray):
         """
         M, N = self.shape
         if M == N:
-            from numpy.dual import inv as func
+            from numpy.linalg import inv as func
         else:
-            from numpy.dual import pinv as func
+            from numpy.linalg import pinv as func
         return asmatrix(func(self))
 
     @property
@@ -1026,8 +1025,8 @@ def _from_string(str, gdict, ldict):
             except KeyError:
                 try:
                     thismat = gdict[col]
-                except KeyError:
-                    raise KeyError("%s not found" % (col,))
+                except KeyError as e:
+                    raise NameError(f"name {col!r} is not defined") from None
 
             coltup.append(thismat)
         rowtup.append(concatenate(coltup, axis=-1))
@@ -1046,7 +1045,7 @@ def bmat(obj, ldict=None, gdict=None):
         referenced by name.
     ldict : dict, optional
         A dictionary that replaces local operands in current frame.
-        Ignored if `obj` is not a string or `gdict` is `None`.
+        Ignored if `obj` is not a string or `gdict` is None.
     gdict : dict, optional
         A dictionary that replaces global operands in current frame.
         Ignored if `obj` is not a string.

@@ -1,8 +1,8 @@
-from __future__ import division, print_function
-
+#!/usr/bin/env python3
 import os
-import genapi
+import argparse
 
+import genapi
 from genapi import \
         TypeApi, GlobalVarApi, FunctionApi, BoolValuesApi
 
@@ -59,21 +59,12 @@ _import_array(void)
       return -1;
   }
 
-#if PY_VERSION_HEX >= 0x03000000
   if (!PyCapsule_CheckExact(c_api)) {
       PyErr_SetString(PyExc_RuntimeError, "_ARRAY_API is not PyCapsule object");
       Py_DECREF(c_api);
       return -1;
   }
   PyArray_API = (void **)PyCapsule_GetPointer(c_api, NULL);
-#else
-  if (!PyCObject_Check(c_api)) {
-      PyErr_SetString(PyExc_RuntimeError, "_ARRAY_API is not PyCObject object");
-      Py_DECREF(c_api);
-      return -1;
-  }
-  PyArray_API = (void **)PyCObject_AsVoidPtr(c_api);
-#endif
   Py_DECREF(c_api);
   if (PyArray_API == NULL) {
       PyErr_SetString(PyExc_RuntimeError, "_ARRAY_API is NULL pointer");
@@ -89,7 +80,12 @@ _import_array(void)
   }
   if (NPY_FEATURE_VERSION > PyArray_GetNDArrayCFeatureVersion()) {
       PyErr_Format(PyExc_RuntimeError, "module compiled against "\
-             "API version 0x%%x but this version of numpy is 0x%%x", \
+             "API version 0x%%x but this version of numpy is 0x%%x . "\
+             "Check the section C-API incompatibility at the "\
+             "Troubleshooting ImportError section at "\
+             "https://numpy.org/devdocs/user/troubleshooting-importerror.html"\
+             "#c-api-incompatibility "\
+              "for indications on how to solve this problem .", \
              (int) NPY_FEATURE_VERSION, (int) PyArray_GetNDArrayCFeatureVersion());
       return -1;
   }
@@ -100,19 +96,22 @@ _import_array(void)
    */
   st = PyArray_GetEndianness();
   if (st == NPY_CPU_UNKNOWN_ENDIAN) {
-      PyErr_Format(PyExc_RuntimeError, "FATAL: module compiled as unknown endian");
+      PyErr_SetString(PyExc_RuntimeError,
+                      "FATAL: module compiled as unknown endian");
       return -1;
   }
 #if NPY_BYTE_ORDER == NPY_BIG_ENDIAN
   if (st != NPY_CPU_BIG) {
-      PyErr_Format(PyExc_RuntimeError, "FATAL: module compiled as "\
-             "big endian, but detected different endianness at runtime");
+      PyErr_SetString(PyExc_RuntimeError,
+                      "FATAL: module compiled as big endian, but "
+                      "detected different endianness at runtime");
       return -1;
   }
 #elif NPY_BYTE_ORDER == NPY_LITTLE_ENDIAN
   if (st != NPY_CPU_LITTLE) {
-      PyErr_Format(PyExc_RuntimeError, "FATAL: module compiled as "\
-             "little endian, but detected different endianness at runtime");
+      PyErr_SetString(PyExc_RuntimeError,
+                      "FATAL: module compiled as little endian, but "
+                      "detected different endianness at runtime");
       return -1;
   }
 #endif
@@ -120,13 +119,7 @@ _import_array(void)
   return 0;
 }
 
-#if PY_VERSION_HEX >= 0x03000000
-#define NUMPY_IMPORT_ARRAY_RETVAL NULL
-#else
-#define NUMPY_IMPORT_ARRAY_RETVAL
-#endif
-
-#define import_array() {if (_import_array() < 0) {PyErr_Print(); PyErr_SetString(PyExc_ImportError, "numpy.core.multiarray failed to import"); return NUMPY_IMPORT_ARRAY_RETVAL; } }
+#define import_array() {if (_import_array() < 0) {PyErr_Print(); PyErr_SetString(PyExc_ImportError, "numpy.core.multiarray failed to import"); return NULL; } }
 
 #define import_array1(ret) {if (_import_array() < 0) {PyErr_Print(); PyErr_SetString(PyExc_ImportError, "numpy.core.multiarray failed to import"); return ret; } }
 
@@ -148,19 +141,12 @@ void *PyArray_API[] = {
 };
 """
 
-c_api_header = """
-===========
-NumPy C-API
-===========
-"""
-
 def generate_api(output_dir, force=False):
     basename = 'multiarray_api'
 
     h_file = os.path.join(output_dir, '__%s.h' % basename)
     c_file = os.path.join(output_dir, '__%s.c' % basename)
-    d_file = os.path.join(output_dir, '%s.txt' % basename)
-    targets = (h_file, c_file, d_file)
+    targets = (h_file, c_file)
 
     sources = numpy_api.multiarray_api
 
@@ -174,7 +160,6 @@ def generate_api(output_dir, force=False):
 def do_generate_api(targets, sources):
     header_file = targets[0]
     c_file = targets[1]
-    doc_file = targets[2]
 
     global_vars = sources[0]
     scalar_bool_values = sources[1]
@@ -193,9 +178,6 @@ def do_generate_api(targets, sources):
 
     numpyapi_list = genapi.get_api_functions('NUMPY_API',
                                              multiarray_funcs)
-
-    # FIXME: ordered_funcs_api is unused
-    ordered_funcs_api = genapi.order_dict(multiarray_funcs)
 
     # Create dict name -> *Api instance
     api_name = 'PyArray_API'
@@ -218,7 +200,9 @@ def do_generate_api(targets, sources):
 
     for name, val in types_api.items():
         index = val[0]
-        multiarray_api_dict[name] = TypeApi(name, index, 'PyTypeObject', api_name)
+        internal_type =  None if len(val) == 1 else val[1]
+        multiarray_api_dict[name] = TypeApi(
+            name, index, 'PyTypeObject', api_name, internal_type)
 
     if len(multiarray_api_dict) != len(multiarray_api_index):
         keys_dict = set(multiarray_api_dict.keys())
@@ -244,11 +228,30 @@ def do_generate_api(targets, sources):
     s = c_template % ',\n'.join(init_list)
     genapi.write_file(c_file, s)
 
-    # write to documentation
-    s = c_api_header
-    for func in numpyapi_list:
-        s += func.to_ReST()
-        s += '\n\n'
-    genapi.write_file(doc_file, s)
-
     return targets
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-o",
+        "--outdir",
+        type=str,
+        help="Path to the output directory"
+    )
+    parser.add_argument(
+        "-i",
+        "--ignore",
+        type=str,
+        help="An ignored input - may be useful to add a "
+             "dependency between custom targets"
+    )
+    args = parser.parse_args()
+
+    outdir_abs = os.path.join(os.getcwd(), args.outdir)
+
+    generate_api(outdir_abs)
+
+
+if __name__ == "__main__":
+    main()

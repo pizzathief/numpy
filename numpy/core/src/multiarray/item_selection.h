@@ -1,5 +1,5 @@
-#ifndef _NPY_PRIVATE__ITEM_SELECTION_H_
-#define _NPY_PRIVATE__ITEM_SELECTION_H_
+#ifndef NUMPY_CORE_SRC_MULTIARRAY_ITEM_SELECTION_H_
+#define NUMPY_CORE_SRC_MULTIARRAY_ITEM_SELECTION_H_
 
 /*
  * Counts the number of True values in a raw boolean array. This
@@ -8,7 +8,7 @@
  * Returns -1 on error.
  */
 NPY_NO_EXPORT npy_intp
-count_boolean_trues(int ndim, char *data, npy_intp *ashape, npy_intp *astrides);
+count_boolean_trues(int ndim, char *data, npy_intp const *ashape, npy_intp const *astrides);
 
 /*
  * Gets a single item from the array, based on a single multi-index
@@ -27,4 +27,4 @@ NPY_NO_EXPORT int
 PyArray_MultiIndexSetItem(PyArrayObject *self, const npy_intp *multi_index,
                                                 PyObject *obj);
 
-#endif
+#endif  /* NUMPY_CORE_SRC_MULTIARRAY_ITEM_SELECTION_H_ */

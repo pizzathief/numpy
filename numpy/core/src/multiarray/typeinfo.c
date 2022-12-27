@@ -3,14 +3,11 @@
  * Unfortunately, we need two different types to cover the cases where min/max
  * do and do not appear in the tuple.
  */
-#include "typeinfo.h"
-
-/* In python 2, this is not exported from Python.h */
-#include <structseq.h>
-
 #define NPY_NO_DEPRECATED_API NPY_API_VERSION
 #define _MULTIARRAYMODULE
+
 #include "npy_pycompat.h"
+#include "typeinfo.h"
 
 
 static PyTypeObject PyArray_typeinfoType;
@@ -58,11 +55,7 @@ PyArray_typeinfo(
     PyObject *entry = PyStructSequence_New(&PyArray_typeinfoType);
     if (entry == NULL)
         return NULL;
-#if defined(NPY_PY3K)
     PyStructSequence_SET_ITEM(entry, 0, Py_BuildValue("C", typechar));
-#else
-    PyStructSequence_SET_ITEM(entry, 0, Py_BuildValue("c", typechar));
-#endif
     PyStructSequence_SET_ITEM(entry, 1, Py_BuildValue("i", typenum));
     PyStructSequence_SET_ITEM(entry, 2, Py_BuildValue("i", nbits));
     PyStructSequence_SET_ITEM(entry, 3, Py_BuildValue("i", align));
@@ -84,11 +77,7 @@ PyArray_typeinforanged(
     PyObject *entry = PyStructSequence_New(&PyArray_typeinforangedType);
     if (entry == NULL)
         return NULL;
-#if defined(NPY_PY3K)
     PyStructSequence_SET_ITEM(entry, 0, Py_BuildValue("C", typechar));
-#else
-    PyStructSequence_SET_ITEM(entry, 0, Py_BuildValue("c", typechar));
-#endif
     PyStructSequence_SET_ITEM(entry, 1, Py_BuildValue("i", typenum));
     PyStructSequence_SET_ITEM(entry, 2, Py_BuildValue("i", nbits));
     PyStructSequence_SET_ITEM(entry, 3, Py_BuildValue("i", align));
@@ -104,19 +93,6 @@ PyArray_typeinforanged(
     return entry;
 }
 
-/* Python version only needed for backport to 2.7 */
-#if (PY_VERSION_HEX < 0x03040000) \
-    || (defined(PYPY_VERSION_NUM) && (PYPY_VERSION_NUM < 0x07020000))
-
-    static int
-    PyStructSequence_InitType2(PyTypeObject *type, PyStructSequence_Desc *desc) {
-        PyStructSequence_InitType(type, desc);
-        if (PyErr_Occurred()) {
-            return -1;
-        }
-        return 0;
-    }
-#endif
 
 NPY_NO_EXPORT int
 typeinfo_init_structsequences(PyObject *multiarray_dict)

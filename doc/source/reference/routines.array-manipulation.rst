@@ -9,6 +9,7 @@ Basic operations
    :toctree: generated/
 
     copyto
+    shape
 
 Changing array shape
 ====================
@@ -58,7 +59,6 @@ Changing kind of array
    asfortranarray
    ascontiguousarray
    asarray_chkfinite
-   asscalar
    require
 
 Joining arrays
@@ -68,11 +68,12 @@ Joining arrays
 
    concatenate
    stack
-   column_stack
-   dstack
-   hstack
-   vstack
    block
+   vstack
+   hstack
+   dstack
+   column_stack
+   row_stack
 
 Splitting arrays
 ================

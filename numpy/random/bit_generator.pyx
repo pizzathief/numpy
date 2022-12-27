@@ -35,27 +35,16 @@ import abc
 import sys
 from itertools import cycle
 import re
+from secrets import randbits
 
-try:
-    from secrets import randbits
-except ImportError:
-    # secrets unavailable on python 3.5 and before
-    from random import SystemRandom
-    randbits = SystemRandom().getrandbits
-
-try:
-    from threading import Lock
-except ImportError:
-    from dummy_threading import Lock
+from threading import Lock
 
 from cpython.pycapsule cimport PyCapsule_New
 
 import numpy as np
 cimport numpy as np
 
-from libc.stdint cimport uint32_t
-from .common cimport (random_raw, benchmark, prepare_ctypes, prepare_cffi)
-from .distributions cimport bitgen_t
+from ._common cimport (random_raw, benchmark, prepare_ctypes, prepare_cffi)
 
 __all__ = ['SeedSequence', 'BitGenerator']
 
@@ -79,12 +68,12 @@ def _int_to_uint32_array(n):
         raise ValueError("expected non-negative integer")
     if n == 0:
         arr.append(np.uint32(n))
-    if isinstance(n, np.unsignedinteger):
-        # Cannot do n & MASK32, convert to python int
-        n = int(n)
+
+    # NumPy ints may not like `n & MASK32` or ``//= 2**32` so use Python int
+    n = int(n)
     while n > 0:
         arr.append(np.uint32(n & MASK32))
-        n //= (2**32)
+        n //= 2**32
     return np.array(arr, dtype=np.uint32)
 
 def _coerce_to_uint32_array(x):
@@ -272,8 +261,10 @@ cdef class SeedSequence():
     entropy : {None, int, sequence[int]}, optional
         The entropy for creating a `SeedSequence`.
     spawn_key : {(), sequence[int]}, optional
-        A third source of entropy, used internally when calling
-        `SeedSequence.spawn`
+        An additional source of entropy based on the position of this
+        `SeedSequence` in the tree of such objects created with the
+        `SeedSequence.spawn` method. Typically, only `SeedSequence.spawn` will
+        set this, and users will not.
     pool_size : {int}, optional
         Size of the pooled entropy to store. Default is 4 to give a 128-bit
         entropy pool. 8 (for 256 bits) is another reasonable choice if working
@@ -384,13 +375,22 @@ cdef class SeedSequence():
         -------
         entropy_array : 1D uint32 array
         """
-        # Convert run-entropy, program-entropy, and the spawn key into uint32
+        # Convert run-entropy and the spawn key into uint32
         # arrays and concatenate them.
 
         # We MUST have at least some run-entropy. The others are optional.
         assert self.entropy is not None
         run_entropy = _coerce_to_uint32_array(self.entropy)
         spawn_entropy = _coerce_to_uint32_array(self.spawn_key)
+        if len(spawn_entropy) > 0 and len(run_entropy) < self.pool_size:
+            # Explicitly fill out the entropy with 0s to the pool size to avoid
+            # conflict with spawn keys. We changed this in 1.19.0 to fix
+            # gh-16539. In order to preserve stream-compatibility with
+            # unspawned SeedSequences with small entropy inputs, we only do
+            # this when a spawn_key is specified.
+            diff = self.pool_size - len(run_entropy)
+            run_entropy = np.concatenate(
+                [run_entropy, np.zeros(diff, dtype=np.uint32)])
         entropy_array = np.concatenate([run_entropy, spawn_entropy])
         return entropy_array
 
@@ -484,13 +484,12 @@ cdef class BitGenerator():
 
     Parameters
     ----------
-    seed : {None, int, array_like[ints], ISeedSequence}, optional
+    seed : {None, int, array_like[ints], SeedSequence}, optional
         A seed to initialize the `BitGenerator`. If None, then fresh,
         unpredictable entropy will be pulled from the OS. If an ``int`` or
         ``array_like[ints]`` is passed, then it will be passed to
-        `SeedSequence` to derive the initial `BitGenerator` state. One may also
-        pass in an implementor of the `ISeedSequence` interface like
-        `SeedSequence`.
+        `~numpy.random.SeedSequence` to derive the initial `BitGenerator` state.
+        One may also pass in a `SeedSequence` instance.
 
     Attributes
     ----------
@@ -501,7 +500,7 @@ cdef class BitGenerator():
         lock.
 
     See Also
-    -------
+    --------
     SeedSequence
     """
 
@@ -573,7 +572,7 @@ cdef class BitGenerator():
 
         Notes
         -----
-        This method directly exposes the the raw underlying pseudo-random
+        This method directly exposes the raw underlying pseudo-random
         number generator. All values are returned as unsigned 64-bit
         values irrespective of the number of bits produced by the PRNG.
 
@@ -581,8 +580,8 @@ cdef class BitGenerator():
         """
         return random_raw(&self._bitgen, self.lock, size, output)
 
-    def _benchmark(self, Py_ssize_t cnt, method=u'uint64'):
-        '''Used in tests'''
+    def _benchmark(self, Py_ssize_t cnt, method='uint64'):
+        """Used in tests"""
         return benchmark(&self._bitgen, self.lock, cnt, method)
 
     @property

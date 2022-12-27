@@ -6,26 +6,49 @@ See ``find_function`` for how functions should be formatted, and
 specified.
 
 """
-from __future__ import division, absolute_import, print_function
-
-import sys, os, re
 import hashlib
-
-import textwrap
+import io
+import os
+import re
+import sys
+import importlib.util
 
 from os.path import join
+
+
+def get_processor():
+    # Convoluted because we can't import from numpy.distutils
+    # (numpy is not yet built)
+    conv_template_path = os.path.join(
+        os.path.dirname(__file__),
+        '..', '..', 'distutils', 'conv_template.py'
+    )
+    spec = importlib.util.spec_from_file_location(
+        'conv_template', conv_template_path
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.process_file
+
+
+process_c_file = get_processor()
+
 
 __docformat__ = 'restructuredtext'
 
 # The files under src/ that are scanned for API functions
 API_FILES = [join('multiarray', 'alloc.c'),
+             join('multiarray', 'abstractdtypes.c'),
              join('multiarray', 'arrayfunction_override.c'),
              join('multiarray', 'array_assign_array.c'),
              join('multiarray', 'array_assign_scalar.c'),
+             join('multiarray', 'array_coercion.c'),
+             join('multiarray', 'array_method.c'),
              join('multiarray', 'arrayobject.c'),
              join('multiarray', 'arraytypes.c.src'),
              join('multiarray', 'buffer.c'),
              join('multiarray', 'calculation.c'),
+             join('multiarray', 'common_dtype.c'),
              join('multiarray', 'conversion_utils.c'),
              join('multiarray', 'convert.c'),
              join('multiarray', 'convert_datatype.c'),
@@ -35,6 +58,8 @@ API_FILES = [join('multiarray', 'alloc.c'),
              join('multiarray', 'datetime_busdaycal.c'),
              join('multiarray', 'datetime_strings.c'),
              join('multiarray', 'descriptor.c'),
+             join('multiarray', 'dlpack.c'),
+             join('multiarray', 'dtypemeta.c'),
              join('multiarray', 'einsum.c.src'),
              join('multiarray', 'flagsobject.c'),
              join('multiarray', 'getset.c'),
@@ -73,7 +98,7 @@ def _repl(str):
     return str.replace('Bool', 'npy_bool')
 
 
-class StealRef(object):
+class StealRef:
     def __init__(self, arg):
         self.arg = arg # counting from 1
 
@@ -84,18 +109,7 @@ class StealRef(object):
             return 'NPY_STEALS_REF_TO_ARG(%d)' % self.arg
 
 
-class NonNull(object):
-    def __init__(self, arg):
-        self.arg = arg # counting from 1
-
-    def __str__(self):
-        try:
-            return ' '.join('NPY_GCC_NONNULL(%d)' % x for x in self.arg)
-        except TypeError:
-            return 'NPY_GCC_NONNULL(%d)' % self.arg
-
-
-class Function(object):
+class Function:
     def __init__(self, name, return_type, args, doc=''):
         self.name = name
         self.return_type = _repl(return_type)
@@ -115,21 +129,6 @@ class Function(object):
         else:
             doccomment = ''
         return '%s%s %s(%s)' % (doccomment, self.return_type, self.name, argstr)
-
-    def to_ReST(self):
-        lines = ['::', '', '  ' + self.return_type]
-        argstr = ',\000'.join([self._format_arg(*a) for a in self.args])
-        name = '  %s' % (self.name,)
-        s = textwrap.wrap('(%s)' % (argstr,), width=72,
-                          initial_indent=name,
-                          subsequent_indent=' ' * (len(name)+1),
-                          break_long_words=False)
-        for l in s:
-            lines.append(l.replace('\000', ' ').rstrip())
-        lines.append('')
-        if self.doc:
-            lines.append(textwrap.dedent(self.doc))
-        return '\n'.join(lines)
 
     def api_hash(self):
         m = hashlib.md5()
@@ -169,7 +168,7 @@ def split_arguments(argstr):
     def finish_arg():
         if current_argument:
             argstr = ''.join(current_argument).strip()
-            m = re.match(r'(.*(\s+|[*]))(\w+)$', argstr)
+            m = re.match(r'(.*(\s+|\*))(\w+)$', argstr)
             if m:
                 typename = m.group(1).strip()
                 name = m.group(3)
@@ -215,7 +214,10 @@ def find_functions(filename, tag='API'):
           This function does foo...
          */
     """
-    fo = open(filename, 'r')
+    if filename.endswith(('.c.src', '.h.src')):
+        fo = io.StringIO(process_c_file(filename))
+    else:
+        fo = open(filename, 'r')
     functions = []
     return_type = None
     function_name = None
@@ -272,9 +274,11 @@ def find_functions(filename, tag='API'):
                     state = SCANNING
                 else:
                     function_args.append(line)
-        except Exception:
-            print(filename, lineno + 1)
+        except ParseError:
             raise
+        except Exception as e:
+            msg = "see chained exception for details"
+            raise ParseError(filename, lineno + 1, msg) from e
     fo.close()
     return functions
 
@@ -303,12 +307,14 @@ def write_file(filename, data):
 
 
 # Those *Api classes instances know how to output strings for the generated code
-class TypeApi(object):
-    def __init__(self, name, index, ptr_cast, api_name):
+class TypeApi:
+    def __init__(self, name, index, ptr_cast, api_name, internal_type=None):
         self.index = index
         self.name = name
         self.ptr_cast = ptr_cast
         self.api_name = api_name
+        # The type used internally, if None, same as exported (ptr_cast)
+        self.internal_type = internal_type
 
     def define_from_array_api_string(self):
         return "#define %s (*(%s *)%s[%d])" % (self.name,
@@ -320,12 +326,22 @@ class TypeApi(object):
         return "        (void *) &%s" % self.name
 
     def internal_define(self):
-        astr = """\
-extern NPY_NO_EXPORT PyTypeObject %(type)s;
-""" % {'type': self.name}
+        if self.internal_type is None:
+            return f"extern NPY_NO_EXPORT {self.ptr_cast} {self.name};\n"
+
+        # If we are here, we need to define a larger struct internally, which
+        # the type can be cast safely. But we want to normally use the original
+        # type, so name mangle:
+        mangled_name = f"{self.name}Full"
+        astr = (
+            # Create the mangled name:
+            f"extern NPY_NO_EXPORT {self.internal_type} {mangled_name};\n"
+            # And define the name as: (*(type *)(&mangled_name))
+            f"#define {self.name} (*({self.ptr_cast} *)(&{mangled_name}))\n"
+        )
         return astr
 
-class GlobalVarApi(object):
+class GlobalVarApi:
     def __init__(self, name, index, type, api_name):
         self.name = name
         self.index = index
@@ -349,7 +365,7 @@ extern NPY_NO_EXPORT %(type)s %(name)s;
 
 # Dummy to be able to consistently use *Api instances for all items in the
 # array api
-class BoolValuesApi(object):
+class BoolValuesApi:
     def __init__(self, name, index, api_name):
         self.name = name
         self.index = index
@@ -371,7 +387,7 @@ extern NPY_NO_EXPORT PyBoolScalarObject _PyArrayScalar_BoolValues[2];
 """
         return astr
 
-class FunctionApi(object):
+class FunctionApi:
     def __init__(self, name, index, annotations, return_type, args, api_name):
         self.name = name
         self.index = index
