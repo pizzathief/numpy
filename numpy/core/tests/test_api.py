@@ -102,6 +102,16 @@ def test_array_array():
     assert_raises(ValueError, np.array, [nested], dtype=np.float64)
 
     # Try with lists...
+    # float32
+    assert_equal(np.array([None] * 10, dtype=np.float32),
+                 np.full((10,), np.nan, dtype=np.float32))
+    assert_equal(np.array([[None]] * 10, dtype=np.float32),
+                 np.full((10, 1), np.nan, dtype=np.float32))
+    assert_equal(np.array([[None] * 10], dtype=np.float32),
+                 np.full((1, 10), np.nan, dtype=np.float32))
+    assert_equal(np.array([[None] * 10] * 10, dtype=np.float32),
+                 np.full((10, 10), np.nan, dtype=np.float32))
+    # float64
     assert_equal(np.array([None] * 10, dtype=np.float64),
                  np.full((10,), np.nan, dtype=np.float64))
     assert_equal(np.array([[None]] * 10, dtype=np.float64),
@@ -148,21 +158,6 @@ def test_array_impossible_casts(array):
         rt = np.array(rt)
     with assert_raises(TypeError):
         np.array(rt, dtype="M8")
-
-
-# TODO: remove when fastCopyAndTranspose deprecation expires
-@pytest.mark.parametrize("a",
-    (
-        np.array(2),  # 0D array
-        np.array([3, 2, 7, 0]),  # 1D array
-        np.arange(6).reshape(2, 3)  # 2D array
-    ),
-)
-def test_fastCopyAndTranspose(a):
-    with pytest.deprecated_call():
-        b = np.fastCopyAndTranspose(a)
-        assert_equal(b, a.T)
-        assert b.flags.owndata
 
 
 def test_array_astype():
@@ -274,6 +269,9 @@ def test_array_astype():
     a = np.array(1000, dtype='i4')
     assert_raises(TypeError, a.astype, 'U1', casting='safe')
 
+    # gh-24023
+    assert_raises(TypeError, a.astype)
+
 @pytest.mark.parametrize("dt", ["S", "U"])
 def test_array_astype_to_string_discovery_empty(dt):
     # See also gh-19085
@@ -310,31 +308,22 @@ def test_array_astype_warning(t):
 
 @pytest.mark.parametrize(["dtype", "out_dtype"],
         [(np.bytes_, np.bool_),
-         (np.unicode_, np.bool_),
-         (np.dtype("S10,S9"), np.dtype("?,?"))])
+         (np.str_, np.bool_),
+         (np.dtype("S10,S9"), np.dtype("?,?")),
+         # The following also checks unaligned unicode access:
+         (np.dtype("S7,U9"), np.dtype("?,?"))])
 def test_string_to_boolean_cast(dtype, out_dtype):
-    """
-    Currently, for `astype` strings are cast to booleans effectively by
-    calling `bool(int(string)`. This is not consistent (see gh-9875) and
-    will eventually be deprecated.
-    """
-    arr = np.array(["10", "10\0\0\0", "0\0\0", "0"], dtype=dtype)
-    expected = np.array([True, True, False, False], dtype=out_dtype)
+    # Only the last two (empty) strings are falsy (the `\0` is stripped):
+    arr = np.array(
+            ["10", "10\0\0\0", "0\0\0", "0", "False", " ", "", "\0"],
+            dtype=dtype)
+    expected = np.array(
+            [True, True, True, True, True, True, False, False],
+            dtype=out_dtype)
     assert_array_equal(arr.astype(out_dtype), expected)
-
-@pytest.mark.parametrize(["dtype", "out_dtype"],
-        [(np.bytes_, np.bool_),
-         (np.unicode_, np.bool_),
-         (np.dtype("S10,S9"), np.dtype("?,?"))])
-def test_string_to_boolean_cast_errors(dtype, out_dtype):
-    """
-    These currently error out, since cast to integers fails, but should not
-    error out in the future.
-    """
-    for invalid in ["False", "True", "", "\0", "non-empty"]:
-        arr = np.array([invalid], dtype=dtype)
-        with assert_raises(ValueError):
-            arr.astype(out_dtype)
+    # As it's similar, check that nonzero behaves the same (structs are
+    # nonzero if all entries are)
+    assert_array_equal(np.nonzero(arr), np.nonzero(expected))
 
 @pytest.mark.parametrize("str_type", [str, bytes, np.str_, np.unicode_])
 @pytest.mark.parametrize("scalar_type",

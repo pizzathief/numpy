@@ -7,7 +7,7 @@ from numpy.core.numeric import normalize_axis_tuple
 from numpy.lib.nanfunctions import _nan_mask, _replace_nan
 from numpy.testing import (
     assert_, assert_equal, assert_almost_equal, assert_raises,
-    assert_array_equal, suppress_warnings
+    assert_raises_regex, assert_array_equal, suppress_warnings
     )
 
 
@@ -303,7 +303,10 @@ class TestNanFunctions_ArgminArgmax:
         mat = np.zeros((0, 3))
         for f in self.nanfuncs:
             for axis in [0, None]:
-                assert_raises(ValueError, f, mat, axis=axis)
+                assert_raises_regex(
+                        ValueError,
+                        "attempt to get argm.. of an empty sequence",
+                        f, mat, axis=axis)
             for axis in [1]:
                 res = f(mat, axis=axis)
                 assert_equal(res, np.zeros(0))
@@ -769,6 +772,41 @@ class TestNanFunctions_MeanVarStd(SharedNanFunctionsTestsMixin):
             assert ret.dtype == dtype_reference
             np.testing.assert_allclose(ret, reference)
 
+    def test_nanstd_with_mean_keyword(self):
+        # Setting the seed to make the test reproducible
+        rng = np.random.RandomState(1234)
+        A = rng.randn(10, 20, 5) + 0.5
+        A[:, 5, :] = np.nan
+
+        mean_out = np.zeros((10, 1, 5))
+        std_out = np.zeros((10, 1, 5))
+
+        mean = np.nanmean(A,
+                       out=mean_out,
+                       axis=1,
+                       keepdims=True)
+
+        # The returned  object should be the object specified during calling
+        assert mean_out is mean
+
+        std = np.nanstd(A,
+                     out=std_out,
+                     axis=1,
+                     keepdims=True,
+                     mean=mean)
+
+        # The returned  object should be the object specified during calling
+        assert std_out is std
+
+        # Shape of returned mean and std should be same
+        assert std.shape == mean.shape
+        assert std.shape == (10, 1, 5)
+
+        # Output should be the same as from the individual algorithms
+        std_old = np.nanstd(A, axis=1, keepdims=True)
+
+        assert std_old.shape == mean.shape
+        assert_almost_equal(std, std_old)
 
 _TIME_UNITS = (
     "Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"

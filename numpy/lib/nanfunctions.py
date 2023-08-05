@@ -169,7 +169,7 @@ def _remove_nan_1d(arr1d, overwrite_input=False):
     s = np.nonzero(c)[0]
     if s.size == arr1d.size:
         warnings.warn("All-NaN slice encountered", RuntimeWarning,
-                      stacklevel=5)
+                      stacklevel=6)
         return arr1d[:0], True
     elif s.size == 0:
         return arr1d, overwrite_input
@@ -343,7 +343,7 @@ def nanmin(a, axis=None, out=None, keepdims=np._NoValue, initial=np._NoValue,
         res = np.fmin.reduce(a, axis=axis, out=out, **kwargs)
         if np.isnan(res).any():
             warnings.warn("All-NaN slice encountered", RuntimeWarning,
-                          stacklevel=3)
+                          stacklevel=2)
     else:
         # Slow, but safe for subclasses of ndarray
         a, mask = _replace_nan(a, +np.inf)
@@ -357,7 +357,7 @@ def nanmin(a, axis=None, out=None, keepdims=np._NoValue, initial=np._NoValue,
         if np.any(mask):
             res = _copyto(res, np.nan, mask)
             warnings.warn("All-NaN axis encountered", RuntimeWarning,
-                          stacklevel=3)
+                          stacklevel=2)
     return res
 
 
@@ -476,7 +476,7 @@ def nanmax(a, axis=None, out=None, keepdims=np._NoValue, initial=np._NoValue,
         res = np.fmax.reduce(a, axis=axis, out=out, **kwargs)
         if np.isnan(res).any():
             warnings.warn("All-NaN slice encountered", RuntimeWarning,
-                          stacklevel=3)
+                          stacklevel=2)
     else:
         # Slow, but safe for subclasses of ndarray
         a, mask = _replace_nan(a, -np.inf)
@@ -490,7 +490,7 @@ def nanmax(a, axis=None, out=None, keepdims=np._NoValue, initial=np._NoValue,
         if np.any(mask):
             res = _copyto(res, np.nan, mask)
             warnings.warn("All-NaN axis encountered", RuntimeWarning,
-                          stacklevel=3)
+                          stacklevel=2)
     return res
 
 
@@ -546,7 +546,7 @@ def nanargmin(a, axis=None, out=None, *, keepdims=np._NoValue):
 
     """
     a, mask = _replace_nan(a, np.inf)
-    if mask is not None:
+    if mask is not None and mask.size:
         mask = np.all(mask, axis=axis)
         if np.any(mask):
             raise ValueError("All-NaN slice encountered")
@@ -607,7 +607,7 @@ def nanargmax(a, axis=None, out=None, *, keepdims=np._NoValue):
 
     """
     a, mask = _replace_nan(a, -np.inf)
-    if mask is not None:
+    if mask is not None and mask.size:
         mask = np.all(mask, axis=axis)
         if np.any(mask):
             raise ValueError("All-NaN slice encountered")
@@ -713,10 +713,9 @@ def nansum(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
     >>> np.nansum([1, np.nan, np.NINF])
     -inf
     >>> from numpy.testing import suppress_warnings
-    >>> with suppress_warnings() as sup:
-    ...     sup.filter(RuntimeWarning)
+    >>> with np.errstate(invalid="ignore"):
     ...     np.nansum([1, np.nan, np.inf, -np.inf]) # both +/- infinity present
-    nan
+    np.float64(nan)
 
     """
     a, mask = _replace_nan(a, 0)
@@ -1049,7 +1048,7 @@ def nanmean(a, axis=None, dtype=None, out=None, keepdims=np._NoValue,
 
     isbad = (cnt == 0)
     if isbad.any():
-        warnings.warn("Mean of empty slice", RuntimeWarning, stacklevel=3)
+        warnings.warn("Mean of empty slice", RuntimeWarning, stacklevel=2)
         # NaN is the only possible bad value, so no further
         # action is needed to handle bad results.
     return avg
@@ -1109,7 +1108,7 @@ def _nanmedian_small(a, axis=None, out=None, overwrite_input=False):
     m = np.ma.median(a, axis=axis, overwrite_input=overwrite_input)
     for i in range(np.count_nonzero(m.mask.ravel())):
         warnings.warn("All-NaN slice encountered", RuntimeWarning,
-                      stacklevel=4)
+                      stacklevel=5)
 
     fill_value = np.timedelta64("NaT") if m.dtype.kind == "m" else np.nan
     if out is not None:
@@ -1191,7 +1190,7 @@ def nanmedian(a, axis=None, out=None, overwrite_input=False, keepdims=np._NoValu
     array([[10., nan,  4.],
            [ 3.,  2.,  1.]])
     >>> np.median(a)
-    nan
+    np.float64(nan)
     >>> np.nanmedian(a)
     3.0
     >>> np.nanmedian(a, axis=0)
@@ -1341,7 +1340,7 @@ def nanpercentile(
     array([[10.,  nan,   4.],
           [ 3.,   2.,   1.]])
     >>> np.percentile(a, 50)
-    nan
+    np.float64(nan)
     >>> np.nanpercentile(a, 50)
     3.0
     >>> np.nanpercentile(a, 50, axis=0)
@@ -1415,8 +1414,8 @@ def nanquantile(
         Input array or object that can be converted to an array, containing
         nan values to be ignored
     q : array_like of float
-        Quantile or sequence of quantiles to compute, which must be between
-        0 and 1 inclusive.
+        Probability or sequence of probabilities for the quantiles to compute.
+        Values must be between 0 and 1 inclusive.
     axis : {int, tuple of int, None}, optional
         Axis or axes along which the quantiles are computed. The
         default is to compute the quantile(s) along a flattened
@@ -1476,8 +1475,8 @@ def nanquantile(
     Returns
     -------
     quantile : scalar or ndarray
-        If `q` is a single percentile and `axis=None`, then the result
-        is a scalar. If multiple quantiles are given, first axis of
+        If `q` is a single probability and `axis=None`, then the result
+        is a scalar. If multiple probability levels are given, first axis of
         the result corresponds to the quantiles. The other axes are
         the axes that remain after the reduction of `a`. If the input
         contains integers or floats smaller than ``float64``, the output
@@ -1504,7 +1503,7 @@ def nanquantile(
     array([[10.,  nan,   4.],
           [ 3.,   2.,   1.]])
     >>> np.quantile(a, 0.5)
-    nan
+    np.float64(nan)
     >>> np.nanquantile(a, 0.5)
     3.0
     >>> np.nanquantile(a, 0.5, axis=0)
@@ -1610,13 +1609,13 @@ def _nanquantile_1d(arr1d, q, overwrite_input=False, method="linear"):
 
 
 def _nanvar_dispatcher(a, axis=None, dtype=None, out=None, ddof=None,
-                       keepdims=None, *, where=None):
+                       keepdims=None, *, where=None, mean=None):
     return (a, out)
 
 
 @array_function_dispatch(_nanvar_dispatcher)
 def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
-           *, where=np._NoValue):
+           *, where=np._NoValue, mean=np._NoValue):
     """
     Compute the variance along the specified axis, while ignoring NaNs.
 
@@ -1658,6 +1657,14 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
         details.
 
         .. versionadded:: 1.22.0
+
+    mean : array like, optional
+        Provide the mean to prevent its recalculation. The mean should have
+        a shape as if it was calculated with ``keepdims=True``.
+        The axis for the calculation of the mean should be the same as used in
+        the call to this var function.
+
+        .. versionadded:: 1.26.0
 
     Returns
     -------
@@ -1713,7 +1720,7 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
     arr, mask = _replace_nan(a, 0)
     if mask is None:
         return np.var(arr, axis=axis, dtype=dtype, out=out, ddof=ddof,
-                      keepdims=keepdims, where=where)
+                      keepdims=keepdims, where=where, mean=mean)
 
     if dtype is not None:
         dtype = np.dtype(dtype)
@@ -1727,15 +1734,21 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
         _keepdims = np._NoValue
     else:
         _keepdims = True
-    # we need to special case matrix for reverse compatibility
-    # in order for this to work, these sums need to be called with
-    # keepdims=True, however matrix now raises an error in this case, but
-    # the reason that it drops the keepdims kwarg is to force keepdims=True
-    # so this used to work by serendipity.
+
     cnt = np.sum(~mask, axis=axis, dtype=np.intp, keepdims=_keepdims,
-                 where=where)
-    avg = np.sum(arr, axis=axis, dtype=dtype, keepdims=_keepdims, where=where)
-    avg = _divide_by_count(avg, cnt)
+                     where=where)
+
+    if mean is not np._NoValue:
+        avg = mean
+    else:
+        # we need to special case matrix for reverse compatibility
+        # in order for this to work, these sums need to be called with
+        # keepdims=True, however matrix now raises an error in this case, but
+        # the reason that it drops the keepdims kwarg is to force keepdims=True
+        # so this used to work by serendipity.
+        avg = np.sum(arr, axis=axis, dtype=dtype,
+                     keepdims=_keepdims, where=where)
+        avg = _divide_by_count(avg, cnt)
 
     # Compute squared deviation from mean.
     np.subtract(arr, avg, out=arr, casting='unsafe', where=where)
@@ -1763,7 +1776,7 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
     isbad = (dof <= 0)
     if np.any(isbad):
         warnings.warn("Degrees of freedom <= 0 for slice.", RuntimeWarning,
-                      stacklevel=3)
+                      stacklevel=2)
         # NaN, inf, or negative numbers are all possible bad
         # values, so explicitly replace them with NaN.
         var = _copyto(var, np.nan, isbad)
@@ -1771,13 +1784,13 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
 
 
 def _nanstd_dispatcher(a, axis=None, dtype=None, out=None, ddof=None,
-                       keepdims=None, *, where=None):
+                       keepdims=None, *, where=None, mean=None):
     return (a, out)
 
 
 @array_function_dispatch(_nanstd_dispatcher)
 def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
-           *, where=np._NoValue):
+           *, where=np._NoValue, mean=np._NoValue):
     """
     Compute the standard deviation along the specified axis, while
     ignoring NaNs.
@@ -1826,6 +1839,14 @@ def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
         See `~numpy.ufunc.reduce` for details.
 
         .. versionadded:: 1.22.0
+
+    mean : array like, optional
+        Provide the mean to prevent its recalculation. The mean should have
+        a shape as if it was calculated with ``keepdims=True``.
+        The axis for the calculation of the mean should be the same as used in
+        the call to this std function.
+
+        .. versionadded:: 1.26.0
 
     Returns
     -------
@@ -1877,7 +1898,7 @@ def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=np._NoValue,
 
     """
     var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
-                 keepdims=keepdims, where=where)
+                 keepdims=keepdims, where=where, mean=mean)
     if isinstance(var, np.ndarray):
         std = np.sqrt(var, out=var)
     elif hasattr(var, 'dtype'):

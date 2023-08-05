@@ -99,12 +99,6 @@ DOCTEST_SKIPDICT = {
     'numpy.lib.DataSource': None,
     'numpy.lib.Repository': None,
 }
-if sys.version_info < (3, 9):
-    DOCTEST_SKIPDICT.update({
-        "numpy.core.ndarray": {"__class_getitem__"},
-        "numpy.core.dtype": {"__class_getitem__"},
-        "numpy.core.number": {"__class_getitem__"},
-    })
 
 # Skip non-numpy RST files, historical release notes
 # Any single-directory exact match will skip the directory and all subdirs.
@@ -721,7 +715,7 @@ class Checker(doctest.OutputChecker):
             # Maybe we're printing a numpy array? This produces invalid python
             # code: `print(np.arange(3))` produces "[0 1 2]" w/o commas between
             # values. So, reinsert commas and retry.
-            # TODO: handle (1) abberivation (`print(np.arange(10000))`), and
+            # TODO: handle (1) abbreviation (`print(np.arange(10000))`), and
             #              (2) n-dim arrays with n > 1
             s_want = want.strip()
             s_got = got.strip()

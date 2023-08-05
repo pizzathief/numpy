@@ -12,6 +12,7 @@ NOTE: Many of the methods of ndarray have corresponding functions.
 from numpy.core.function_base import add_newdoc
 from numpy.core.overrides import array_function_like_doc
 
+
 ###############################################################################
 #
 # flatiter
@@ -389,7 +390,8 @@ add_newdoc('numpy.core', 'nditer',
     `WRITEBACKIFCOPY` flag. In this case `nditer` must be used as a
     context manager or the `nditer.close` method must be called before
     using the result. The temporary data will be written back to the
-    original data when the `__exit__` function is called but not before:
+    original data when the :meth:`~object.__exit__` function is called
+    but not before:
 
     >>> a = np.arange(6, dtype='i4')[::-2]
     >>> with np.nditer(a, [],
@@ -1672,16 +1674,6 @@ add_newdoc('numpy.core.multiarray', 'from_dlpack',
     >>> y = np.from_dlpack(x)
     """)
 
-add_newdoc('numpy.core', 'fastCopyAndTranspose',
-    """
-    fastCopyAndTranspose(a)
-
-    .. deprecated:: 1.24
-
-       fastCopyAndTranspose is deprecated and will be removed. Use the copy and
-       transpose methods instead, e.g. ``arr.T.copy()``
-    """)
-
 add_newdoc('numpy.core.multiarray', 'correlate',
     """cross_correlate(a,v, mode=0)""")
 
@@ -1818,56 +1810,6 @@ add_newdoc('numpy.core.multiarray', 'set_string_function',
     set_string_function(f, repr=1)
 
     Internal method to set a function to be used when pretty printing arrays.
-
-    """)
-
-add_newdoc('numpy.core.multiarray', 'set_numeric_ops',
-    """
-    set_numeric_ops(op1=func1, op2=func2, ...)
-
-    Set numerical operators for array objects.
-
-    .. deprecated:: 1.16
-
-        For the general case, use :c:func:`PyUFunc_ReplaceLoopBySignature`.
-        For ndarray subclasses, define the ``__array_ufunc__`` method and
-        override the relevant ufunc.
-
-    Parameters
-    ----------
-    op1, op2, ... : callable
-        Each ``op = func`` pair describes an operator to be replaced.
-        For example, ``add = lambda x, y: np.add(x, y) % 5`` would replace
-        addition by modulus 5 addition.
-
-    Returns
-    -------
-    saved_ops : list of callables
-        A list of all operators, stored before making replacements.
-
-    Notes
-    -----
-    .. warning::
-       Use with care!  Incorrect usage may lead to memory errors.
-
-    A function replacing an operator cannot make use of that operator.
-    For example, when replacing add, you may not use ``+``.  Instead,
-    directly call ufuncs.
-
-    Examples
-    --------
-    >>> def add_mod5(x, y):
-    ...     return np.add(x, y) % 5
-    ...
-    >>> old_funcs = np.set_numeric_ops(add=add_mod5)
-
-    >>> x = np.arange(12).reshape((3, 4))
-    >>> x + x
-    array([[0, 2, 4, 1],
-           [3, 0, 2, 4],
-           [1, 3, 0, 2]])
-
-    >>> ignore = np.set_numeric_ops(**old_funcs) # restore operators
 
     """)
 
@@ -2703,6 +2645,12 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('nbytes',
     Does not include memory consumed by non-element attributes of the
     array object.
 
+    See Also
+    --------
+    sys.getsizeof
+        Memory consumed by the object itself without parents in case view.
+        This does include memory consumed by non-element attributes.
+
     Examples
     --------
     >>> x = np.zeros((3,5,2), dtype=np.complex128)
@@ -2832,8 +2780,8 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('strides',
 
         offset = sum(np.array(i) * a.strides)
 
-    A more detailed explanation of strides can be found in the
-    "ndarray.rst" file in the NumPy reference guide.
+    A more detailed explanation of strides can be found in
+    :ref:`arrays.ndarray`.
 
     .. warning::
 
@@ -2920,6 +2868,45 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('T',
     """))
 
 
+add_newdoc('numpy.core.multiarray', 'ndarray', ('mT',
+    """
+    View of the matrix transposed array.
+    
+    The matrix transpose is the transpose of the last two dimensions, even
+    if the array is of higher dimension.
+
+    .. versionadded:: 2.0
+
+    Raises
+    ------
+    ValueError
+        If the array is of dimension less than 2.
+        
+    Examples
+    --------
+    >>> a = np.array([[1, 2], [3, 4]])
+    >>> a
+    array([[1, 2],
+           [3, 4]])
+    >>> a.mT
+    array([[1, 3],
+           [2, 4]])
+           
+    >>> a = np.arange(8).reshape((2, 2, 2))
+    >>> a
+    array([[[0, 1],
+            [2, 3]],
+    <BLANKLINE>
+           [[4, 5],
+            [6, 7]]])
+    >>> a.mT
+    array([[[0, 2],
+            [1, 3]],
+    <BLANKLINE>
+           [[4, 6],
+            [5, 7]]])
+    
+    """))
 ##############################################################################
 #
 # ndarray methods
@@ -2928,7 +2915,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('T',
 
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('__array__',
-    """ a.__array__([dtype], /) -> reference if type unchanged, copy otherwise.
+    """ a.__array__([dtype], /)
 
     Returns either a new reference to self if dtype is not given or a new array
     of provided data type if dtype is different from the current dtype of the
@@ -2991,10 +2978,6 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('__class_getitem__',
     >>> np.ndarray[Any, np.dtype[Any]]
     numpy.ndarray[typing.Any, numpy.dtype[typing.Any]]
 
-    Notes
-    -----
-    This method is only available for python 3.9 and later.
-
     See Also
     --------
     :pep:`585` : Type hinting generics in standard collections.
@@ -3005,7 +2988,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('__class_getitem__',
 
 
 add_newdoc('numpy.core.multiarray', 'ndarray', ('__deepcopy__',
-    """a.__deepcopy__(memo, /) -> Deep copy of array.
+    """a.__deepcopy__(memo, /)
 
     Used if :func:`copy.deepcopy` is called on an array.
 
@@ -4494,7 +4477,8 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('tobytes', """
 add_newdoc('numpy.core.multiarray', 'ndarray', ('tostring', r"""
     a.tostring(order='C')
 
-    A compatibility alias for `tobytes`, with exactly the same behavior.
+    A compatibility alias for `~ndarray.tobytes`, with exactly the same
+    behavior.
 
     Despite its name, it returns `bytes` not `str`\ s.
 
@@ -4671,7 +4655,7 @@ add_newdoc('numpy.core.multiarray', 'ndarray', ('view',
 
     >>> x[0] = (9, 10)
     >>> z[0]
-    (9, 10)
+    np.record((9, 10), dtype=[('a', 'i1'), ('b', 'i1')])
 
     Views that change the dtype size (bytes per entry) should normally be
     avoided on arrays defined by slices, transposes, fortran-ordering, etc.:
@@ -4760,129 +4744,6 @@ add_newdoc('numpy.core.umath', 'frompyfunc',
     array(['0o12', '0o36', '0o144'], dtype=object)
     >>> np.array((oct(10), oct(30), oct(100))) # for comparison
     array(['0o12', '0o36', '0o144'], dtype='<U5')
-
-    """)
-
-add_newdoc('numpy.core.umath', 'geterrobj',
-    """
-    geterrobj()
-
-    Return the current object that defines floating-point error handling.
-
-    The error object contains all information that defines the error handling
-    behavior in NumPy. `geterrobj` is used internally by the other
-    functions that get and set error handling behavior (`geterr`, `seterr`,
-    `geterrcall`, `seterrcall`).
-
-    Returns
-    -------
-    errobj : list
-        The error object, a list containing three elements:
-        [internal numpy buffer size, error mask, error callback function].
-
-        The error mask is a single integer that holds the treatment information
-        on all four floating point errors. The information for each error type
-        is contained in three bits of the integer. If we print it in base 8, we
-        can see what treatment is set for "invalid", "under", "over", and
-        "divide" (in that order). The printed string can be interpreted with
-
-        * 0 : 'ignore'
-        * 1 : 'warn'
-        * 2 : 'raise'
-        * 3 : 'call'
-        * 4 : 'print'
-        * 5 : 'log'
-
-    See Also
-    --------
-    seterrobj, seterr, geterr, seterrcall, geterrcall
-    getbufsize, setbufsize
-
-    Notes
-    -----
-    For complete documentation of the types of floating-point exceptions and
-    treatment options, see `seterr`.
-
-    Examples
-    --------
-    >>> np.geterrobj()  # first get the defaults
-    [8192, 521, None]
-
-    >>> def err_handler(type, flag):
-    ...     print("Floating point error (%s), with flag %s" % (type, flag))
-    ...
-    >>> old_bufsize = np.setbufsize(20000)
-    >>> old_err = np.seterr(divide='raise')
-    >>> old_handler = np.seterrcall(err_handler)
-    >>> np.geterrobj()
-    [8192, 521, <function err_handler at 0x91dcaac>]
-
-    >>> old_err = np.seterr(all='ignore')
-    >>> np.base_repr(np.geterrobj()[1], 8)
-    '0'
-    >>> old_err = np.seterr(divide='warn', over='log', under='call',
-    ...                     invalid='print')
-    >>> np.base_repr(np.geterrobj()[1], 8)
-    '4351'
-
-    """)
-
-add_newdoc('numpy.core.umath', 'seterrobj',
-    """
-    seterrobj(errobj, /)
-
-    Set the object that defines floating-point error handling.
-
-    The error object contains all information that defines the error handling
-    behavior in NumPy. `seterrobj` is used internally by the other
-    functions that set error handling behavior (`seterr`, `seterrcall`).
-
-    Parameters
-    ----------
-    errobj : list
-        The error object, a list containing three elements:
-        [internal numpy buffer size, error mask, error callback function].
-
-        The error mask is a single integer that holds the treatment information
-        on all four floating point errors. The information for each error type
-        is contained in three bits of the integer. If we print it in base 8, we
-        can see what treatment is set for "invalid", "under", "over", and
-        "divide" (in that order). The printed string can be interpreted with
-
-        * 0 : 'ignore'
-        * 1 : 'warn'
-        * 2 : 'raise'
-        * 3 : 'call'
-        * 4 : 'print'
-        * 5 : 'log'
-
-    See Also
-    --------
-    geterrobj, seterr, geterr, seterrcall, geterrcall
-    getbufsize, setbufsize
-
-    Notes
-    -----
-    For complete documentation of the types of floating-point exceptions and
-    treatment options, see `seterr`.
-
-    Examples
-    --------
-    >>> old_errobj = np.geterrobj()  # first get the defaults
-    >>> old_errobj
-    [8192, 521, None]
-
-    >>> def err_handler(type, flag):
-    ...     print("Floating point error (%s), with flag %s" % (type, flag))
-    ...
-    >>> new_errobj = [20000, 12, err_handler]
-    >>> np.seterrobj(new_errobj)
-    >>> np.base_repr(12, 8)  # int for divide=4 ('print') and over=1 ('warn')
-    '14'
-    >>> np.geterr()
-    {'over': 'warn', 'divide': 'print', 'invalid': 'ignore', 'under': 'ignore'}
-    >>> np.geterrcall() is err_handler
-    True
 
     """)
 
@@ -5240,10 +5101,10 @@ add_newdoc('numpy.core', 'ufunc', ('signature',
 
     Examples
     --------
-    >>> np.core.umath_tests.matrix_multiply.signature
-    '(m,n),(n,p)->(m,p)'
     >>> np.linalg._umath_linalg.det.signature
     '(m,m)->()'
+    >>> np.matmul.signature
+    '(n?,k),(k,m?)->(n?,m?)'
     >>> np.add.signature is None
     True  # equivalent to '(),()->()'
     """))
@@ -5750,7 +5611,7 @@ add_newdoc('numpy.core', 'ufunc', ('resolve_dtypes',
     >>> int32 = np.dtype("int32")
     >>> float32 = np.dtype("float32")
 
-    The typical ufunc call does not pass an output dtype.  `np.add` has two
+    The typical ufunc call does not pass an output dtype.  `numpy.add` has two
     inputs and one output, so leave the output as ``None`` (not provided):
 
     >>> np.add.resolve_dtypes((int32, float32, None))
@@ -5867,7 +5728,7 @@ add_newdoc('numpy.core', 'ufunc', ('_get_strided_loop',
 
 add_newdoc('numpy.core.multiarray', 'dtype',
     """
-    dtype(dtype, align=False, copy=False)
+    dtype(dtype, align=False, copy=False, [metadata])
 
     Create a data type object.
 
@@ -5887,6 +5748,8 @@ add_newdoc('numpy.core.multiarray', 'dtype',
     copy : bool, optional
         Make a new copy of the data-type object. If ``False``, the result
         may just be a reference to a built-in data-type object.
+    metadata : dict, optional
+        An optional dictionary with dtype metadata.
 
     See also
     --------
@@ -6006,8 +5869,8 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('byteorder',
     >>> # '=' is the byteorder
     >>> import sys
     >>> sys_is_le = sys.byteorder == 'little'
-    >>> native_code = sys_is_le and '<' or '>'
-    >>> swapped_code = sys_is_le and '>' or '<'
+    >>> native_code = '<' if sys_is_le else '>'
+    >>> swapped_code = '>' if sys_is_le else '<'
     >>> dt = np.dtype(native_code + 'i2')
     >>> dt.byteorder
     '='
@@ -6038,7 +5901,7 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('descr',
     `__array_interface__` attribute.
 
     Warning: This attribute exists specifically for `__array_interface__`,
-    and passing it directly to `np.dtype` will not accurately reconstruct
+    and passing it directly to `numpy.dtype` will not accurately reconstruct
     some dtypes (e.g., scalar and subarray dtypes).
 
     Examples
@@ -6446,8 +6309,8 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('newbyteorder',
     --------
     >>> import sys
     >>> sys_is_le = sys.byteorder == 'little'
-    >>> native_code = sys_is_le and '<' or '>'
-    >>> swapped_code = sys_is_le and '>' or '<'
+    >>> native_code = '<' if sys_is_le else '>'
+    >>> swapped_code = '>' if sys_is_le else '<'
     >>> native_dt = np.dtype(native_code+'i2')
     >>> swapped_dt = np.dtype(swapped_code+'i2')
     >>> native_dt.newbyteorder('S') == swapped_dt
@@ -6492,10 +6355,6 @@ add_newdoc('numpy.core.multiarray', 'dtype', ('__class_getitem__',
 
     >>> np.dtype[np.int64]
     numpy.dtype[numpy.int64]
-
-    Notes
-    -----
-    This method is only available for python 3.9 and later.
 
     See Also
     --------
@@ -7006,10 +6865,6 @@ add_newdoc('numpy.core.numerictypes', 'number', ('__class_getitem__',
     >>> np.signedinteger[Any]
     numpy.signedinteger[typing.Any]
 
-    Notes
-    -----
-    This method is only available for python 3.9 and later.
-
     See Also
     --------
     :pep:`585` : Type hinting generics in standard collections.
@@ -7071,7 +6926,7 @@ add_newdoc('numpy.core.numerictypes', 'complexfloating',
 add_newdoc('numpy.core.numerictypes', 'flexible',
     """
     Abstract base class of all scalar types without predefined length.
-    The actual size of these types depends on the specific `np.dtype`
+    The actual size of these types depends on the specific `numpy.dtype`
     instantiation.
 
     """)

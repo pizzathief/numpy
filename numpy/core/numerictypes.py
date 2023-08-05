@@ -80,6 +80,7 @@ Exported symbols include:
 
 """
 import numbers
+import warnings
 
 from .multiarray import (
         ndarray, array, dtype, datetime_data, datetime_as_string,
@@ -89,7 +90,7 @@ from .._utils import set_module
 
 # we add more at the bottom
 __all__ = ['sctypeDict', 'sctypes',
-           'ScalarType', 'obj2sctype', 'cast', 'nbytes', 'sctype2char',
+           'ScalarType', 'obj2sctype', 'nbytes', 'sctype2char',
            'maximum_sctype', 'issctype', 'typecodes', 'find_common_type',
            'issubdtype', 'datetime_data', 'datetime_as_string',
            'busday_offset', 'busday_count', 'is_busday', 'busdaycalendar',
@@ -115,7 +116,6 @@ from ._dtype import _kind_name
 # we don't export these for import *, but we do want them accessible
 # as numerictypes.bool, etc.
 from builtins import bool, int, float, complex, object, str, bytes
-from numpy.compat import long, unicode
 
 
 # We use this later
@@ -133,6 +133,9 @@ genericTypeRank = ['bool', 'int8', 'uint8', 'int16', 'uint16',
 def maximum_sctype(t):
     """
     Return the scalar type of highest precision of the same kind as the input.
+
+    .. deprecated:: 2.0
+        Use an explicit dtype like int64 or float64 instead.
 
     Parameters
     ----------
@@ -168,6 +171,15 @@ def maximum_sctype(t):
     <class 'numpy.float128'> # may vary
 
     """
+
+    # Deprecated in NumPy 2.0, 2023-07-11
+    warnings.warn(
+        "`maximum_sctype` is deprecated. Use an explicit dtype like int64 "
+        "or float64 instead. (deprecated in NumPy 2.0)",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     g = obj2sctype(t)
     if g is None:
         return t
@@ -245,7 +257,7 @@ def obj2sctype(rep, default=None):
 
     See Also
     --------
-    sctype2char, issctype, issubsctype, issubdtype, maximum_sctype
+    sctype2char, issctype, issubsctype, issubdtype
 
     Examples
     --------
@@ -434,14 +446,12 @@ class _typedict(dict):
         return dict.__getitem__(self, obj2sctype(obj))
 
 nbytes = _typedict()
-_alignment = _typedict()
 _maxvals = _typedict()
 _minvals = _typedict()
 def _construct_lookups():
     for name, info in _concrete_typeinfo.items():
         obj = info.type
         nbytes[obj] = info.bits // 8
-        _alignment[obj] = info.alignment
         if len(info) > 5:
             _maxvals[obj] = info.max
             _minvals[obj] = info.min
@@ -502,12 +512,6 @@ def sctype2char(sctype):
         # for compatibility
         raise KeyError(sctype)
     return dtype(sctype).char
-
-# Create dictionary of casting functions that wrap sequences
-# indexed by type or type character
-cast = _typedict()
-for key in _concrete_types:
-    cast[key] = lambda x, k=key: array(x, copy=False).astype(k)
 
 
 def _scalar_type_key(typ):
@@ -599,6 +603,16 @@ def find_common_type(array_types, scalar_types):
     """
     Determine common type following standard coercion rules.
 
+    .. deprecated:: NumPy 1.25
+
+        This function is deprecated, use `numpy.promote_types` or
+        `numpy.result_type` instead.  To achieve semantics for the
+        `scalar_types` argument, use `numpy.result_type` and pass the Python
+        values `0`, `0.0`, or `0j`.
+        This will give the same results in almost all cases.
+        More information and rare exception can be found in the
+        `NumPy 1.25 release notes <https://numpy.org/devdocs/release/1.25.0-notes.html>`_.
+
     Parameters
     ----------
     array_types : sequence
@@ -646,6 +660,14 @@ def find_common_type(array_types, scalar_types):
     dtype('complex128')
 
     """
+    # Deprecated 2022-11-07, NumPy 1.25
+    warnings.warn(
+            "np.find_common_type is deprecated.  Please use `np.result_type` "
+            "or `np.promote_types`.\n"
+            "See https://numpy.org/devdocs/release/1.25.0-notes.html and the "
+            "docs for more information.  (Deprecated NumPy 1.25)",
+            DeprecationWarning, stacklevel=2)
+
     array_types = [dtype(x) for x in array_types]
     scalar_types = [dtype(x) for x in scalar_types]
 

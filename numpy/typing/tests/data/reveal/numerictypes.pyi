@@ -1,8 +1,5 @@
 import numpy as np
 
-reveal_type(np.maximum_sctype(np.float64))  # E: Type[{float64}]
-reveal_type(np.maximum_sctype("f8"))  # E: Type[Any]
-
 reveal_type(np.issctype(np.float64))  # E: bool
 reveal_type(np.issctype("foo"))  # E: Literal[False]
 
@@ -20,8 +17,6 @@ reveal_type(np.issubclass_(1, 1))  # E: Literal[False]
 
 reveal_type(np.sctype2char("S8"))  # E: str
 reveal_type(np.sctype2char(list))  # E: str
-
-reveal_type(np.find_common_type([np.int64], [np.int64]))  # E: dtype[Any]
 
 reveal_type(np.cast[int])  # E: _CastFunc
 reveal_type(np.cast["i8"])  # E: _CastFunc

@@ -4,11 +4,12 @@ import operator
 import sys
 import warnings
 import numbers
+import builtins
 
 import numpy as np
 from . import multiarray
 from .multiarray import (
-    fastCopyAndTranspose, ALLOW_THREADS,
+    ALLOW_THREADS,
     BUFSIZE, CLIP, MAXDIMS, MAY_SHARE_BOUNDS, MAY_SHARE_EXACT, RAISE,
     WRAP, arange, array, asarray, asanyarray, ascontiguousarray,
     asfortranarray, broadcast, can_cast, compare_chararrays,
@@ -16,7 +17,7 @@ from .multiarray import (
     empty_like, flatiter, frombuffer, from_dlpack, fromfile, fromiter,
     fromstring, inner, lexsort, matmul, may_share_memory,
     min_scalar_type, ndarray, nditer, nested_iters, promote_types,
-    putmask, result_type, set_numeric_ops, shares_memory, vdot, where,
+    putmask, result_type, shares_memory, vdot, where,
     zeros, normalize_axis_index, _get_promotion_state, _set_promotion_state)
 
 from . import overrides
@@ -42,8 +43,8 @@ __all__ = [
     'arange', 'array', 'asarray', 'asanyarray', 'ascontiguousarray',
     'asfortranarray', 'zeros', 'count_nonzero', 'empty', 'broadcast', 'dtype',
     'fromstring', 'fromfile', 'frombuffer', 'from_dlpack', 'where',
-    'argwhere', 'copyto', 'concatenate', 'fastCopyAndTranspose', 'lexsort',
-    'set_numeric_ops', 'can_cast', 'promote_types', 'min_scalar_type',
+    'argwhere', 'copyto', 'concatenate', 'lexsort',
+    'can_cast', 'promote_types', 'min_scalar_type',
     'result_type', 'isfortran', 'empty_like', 'zeros_like', 'ones_like',
     'correlate', 'convolve', 'inner', 'dot', 'outer', 'vdot', 'roll',
     'rollaxis', 'moveaxis', 'cross', 'tensordot', 'little_endian',
@@ -130,10 +131,6 @@ def zeros_like(a, dtype=None, order='K', subok=True, shape=None):
     return res
 
 
-def _ones_dispatcher(shape, dtype=None, order=None, *, like=None):
-    return(like,)
-
-
 @set_array_function_like_doc
 @set_module('numpy')
 def ones(shape, dtype=None, order='C', *, like=None):
@@ -187,16 +184,14 @@ def ones(shape, dtype=None, order='C', *, like=None):
 
     """
     if like is not None:
-        return _ones_with_like(shape, dtype=dtype, order=order, like=like)
+        return _ones_with_like(like, shape, dtype=dtype, order=order)
 
     a = empty(shape, dtype, order)
     multiarray.copyto(a, 1, casting='unsafe')
     return a
 
 
-_ones_with_like = array_function_dispatch(
-    _ones_dispatcher
-)(ones)
+_ones_with_like = array_function_dispatch()(ones)
 
 
 def _ones_like_dispatcher(a, dtype=None, order=None, subok=None, shape=None):
@@ -323,7 +318,8 @@ def full(shape, fill_value, dtype=None, order='C', *, like=None):
 
     """
     if like is not None:
-        return _full_with_like(shape, fill_value, dtype=dtype, order=order, like=like)
+        return _full_with_like(
+                like, shape, fill_value, dtype=dtype, order=order)
 
     if dtype is None:
         fill_value = asarray(fill_value)
@@ -333,9 +329,7 @@ def full(shape, fill_value, dtype=None, order='C', *, like=None):
     return a
 
 
-_full_with_like = array_function_dispatch(
-    _full_dispatcher
-)(full)
+_full_with_like = array_function_dispatch()(full)
 
 
 def _full_like_dispatcher(a, fill_value, dtype=None, order=None, subok=None, shape=None):
@@ -667,12 +661,12 @@ def correlate(a, v, mode='valid'):
     Cross-correlation of two 1-dimensional sequences.
 
     This function computes the correlation as generally defined in signal
-    processing texts:
+    processing texts [1]_:
 
     .. math:: c_k = \sum_n a_{n+k} \cdot \overline{v}_n
 
     with a and v sequences being zero-padded where necessary and
-    :math:`\overline x` denoting complex conjugation.
+    :math:`\overline v` denoting complex conjugation.
 
     Parameters
     ----------
@@ -699,7 +693,7 @@ def correlate(a, v, mode='valid'):
     Notes
     -----
     The definition of correlation above is not unique and sometimes correlation
-    may be defined differently. Another common definition is:
+    may be defined differently. Another common definition is [1]_:
 
     .. math:: c'_k = \sum_n a_{n} \cdot \overline{v_{n+k}}
 
@@ -708,7 +702,11 @@ def correlate(a, v, mode='valid'):
     `numpy.correlate` may perform slowly in large arrays (i.e. n = 1e5) because it does
     not use the FFT to compute the convolution; in that case, `scipy.signal.correlate` might
     be preferable.
-
+    
+    References
+    ----------
+    .. [1] Wikipedia, "Cross-correlation",
+           https://en.wikipedia.org/wiki/Cross-correlation
 
     Examples
     --------
@@ -847,14 +845,13 @@ def outer(a, b, out=None):
     """
     Compute the outer product of two vectors.
 
-    Given two vectors, ``a = [a0, a1, ..., aM]`` and
-    ``b = [b0, b1, ..., bN]``,
+    Given two vectors `a` and `b` of length ``M`` and ``N``, respectively,
     the outer product [1]_ is::
 
-      [[a0*b0  a0*b1 ... a0*bN ]
-       [a1*b0    .
+      [[a_0*b_0  a_0*b_1 ... a_0*b_{N-1} ]
+       [a_1*b_0    .
        [ ...          .
-       [aM*b0            aM*bN ]]
+       [a_{M-1}*b_0            a_{M-1}*b_{N-1} ]]
 
     Parameters
     ----------
@@ -886,9 +883,9 @@ def outer(a, b, out=None):
 
     References
     ----------
-    .. [1] : G. H. Golub and C. F. Van Loan, *Matrix Computations*, 3rd
-             ed., Baltimore, MD, Johns Hopkins University Press, 1996,
-             pg. 8.
+    .. [1] G. H. Golub and C. F. Van Loan, *Matrix Computations*, 3rd
+           ed., Baltimore, MD, Johns Hopkins University Press, 1996,
+           pg. 8.
 
     Examples
     --------
@@ -1588,6 +1585,10 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
         axisa, axisb, axisc = (axis,) * 3
     a = asarray(a)
     b = asarray(b)
+
+    if (a.ndim < 1) or (b.ndim < 1):
+        raise ValueError("At least one array has zero dimension")
+    
     # Check axisa and axisb are within bounds
     axisa = normalize_axis_index(axisa, a.ndim, msg_prefix='axisa')
     axisb = normalize_axis_index(axisb, b.ndim, msg_prefix='axisb')
@@ -1778,10 +1779,6 @@ def indices(dimensions, dtype=int, sparse=False):
     return res
 
 
-def _fromfunction_dispatcher(function, shape, *, dtype=None, like=None, **kwargs):
-    return (like,)
-
-
 @set_array_function_like_doc
 @set_module('numpy')
 def fromfunction(function, shape, *, dtype=float, like=None, **kwargs):
@@ -1847,15 +1844,14 @@ def fromfunction(function, shape, *, dtype=float, like=None, **kwargs):
 
     """
     if like is not None:
-        return _fromfunction_with_like(function, shape, dtype=dtype, like=like, **kwargs)
+        return _fromfunction_with_like(
+                like, function, shape, dtype=dtype, **kwargs)
 
     args = indices(shape, dtype=dtype)
     return function(*args, **kwargs)
 
 
-_fromfunction_with_like = array_function_dispatch(
-    _fromfunction_dispatcher
-)(fromfunction)
+_fromfunction_with_like = array_function_dispatch()(fromfunction)
 
 
 def _frombuffer(buf, dtype, shape, order):
@@ -2033,7 +2029,7 @@ def binary_repr(num, width=None):
         binary = bin(num)[2:]
         binwidth = len(binary)
         outwidth = (binwidth if width is None
-                    else max(binwidth, width))
+                    else builtins.max(binwidth, width))
         warn_if_insufficient(width, binwidth)
         return binary.zfill(outwidth)
 
@@ -2053,7 +2049,7 @@ def binary_repr(num, width=None):
             binary = bin(twocomp)[2:]
             binwidth = len(binary)
 
-            outwidth = max(binwidth, width)
+            outwidth = builtins.max(binwidth, width)
             warn_if_insufficient(width, binwidth)
             return '1' * (outwidth - binwidth) + binary
 
@@ -2130,10 +2126,6 @@ def _maketup(descr, val):
         return tuple(res)
 
 
-def _identity_dispatcher(n, dtype=None, *, like=None):
-    return (like,)
-
-
 @set_array_function_like_doc
 @set_module('numpy')
 def identity(n, dtype=None, *, like=None):
@@ -2168,15 +2160,13 @@ def identity(n, dtype=None, *, like=None):
 
     """
     if like is not None:
-        return _identity_with_like(n, dtype=dtype, like=like)
+        return _identity_with_like(like, n, dtype=dtype)
 
     from numpy import eye
     return eye(n, dtype=dtype, like=like)
 
 
-_identity_with_like = array_function_dispatch(
-    _identity_dispatcher
-)(identity)
+_identity_with_like = array_function_dispatch()(identity)
 
 
 def _allclose_dispatcher(a, b, rtol=None, atol=None, equal_nan=None):

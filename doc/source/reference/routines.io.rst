@@ -14,6 +14,7 @@ NumPy binary files (NPY, NPZ)
    save
    savez
    savez_compressed
+   lib.npyio.NpzFile
 
 The format of these binary file types is documented in
 :py:mod:`numpy.lib.format`
@@ -83,7 +84,7 @@ Data sources
 
    DataSource
 
-Binary Format Description
+Binary format description
 -------------------------
 .. autosummary::
    :toctree: generated/

@@ -230,8 +230,8 @@ of elements that we want, instead of the step::
     `empty_like`,
     `arange`,
     `linspace`,
-    `numpy.random.Generator.rand`,
-    `numpy.random.Generator.randn`,
+    `random.Generator.random`,
+    `random.Generator.normal`,
     `fromfunction`,
     `fromfile`
 
@@ -1482,7 +1482,7 @@ Further reading
 
 -  The `Python tutorial <https://docs.python.org/tutorial/>`__
 -  :ref:`reference`
--  `SciPy Tutorial <https://docs.scipy.org/doc/scipy/reference/tutorial/index.html>`__
+-  `SciPy Tutorial <https://docs.scipy.org/doc/scipy/tutorial/index.html>`__
 -  `SciPy Lecture Notes <https://scipy-lectures.org>`__
 -  A `matlab, R, IDL, NumPy/SciPy dictionary <http://mathesaurus.sf.net/>`__
 -  :doc:`tutorial-svd <numpy-tutorials:content/tutorial-svd>`

@@ -18,6 +18,7 @@
 #include "can_cast_table.h"
 #include "common.h"
 #include "ctors.h"
+#include "descriptor.h"
 #include "dtypemeta.h"
 #include "common_dtype.h"
 #include "scalartypes.h"
@@ -31,6 +32,7 @@
 #include "array_method.h"
 #include "usertypes.h"
 #include "dtype_transfer.h"
+#include "dtype_traversal.h"
 #include "arrayobject.h"
 
 
@@ -152,7 +154,7 @@ PyArray_GetCastingImpl(PyArray_DTypeMeta *from, PyArray_DTypeMeta *to)
 {
     PyObject *res;
     if (from == to) {
-        res = NPY_DT_SLOTS(from)->within_dtype_castingimpl;
+        res = (PyObject *)NPY_DT_SLOTS(from)->within_dtype_castingimpl;
     }
     else {
         res = PyDict_GetItemWithError(NPY_DT_SLOTS(from)->castingimpls, (PyObject *)to);
@@ -179,6 +181,14 @@ PyArray_GetCastingImpl(PyArray_DTypeMeta *from, PyArray_DTypeMeta *to)
     else if (to->type_num == NPY_VOID) {
         res = PyArray_GetGenericToVoidCastingImpl();
     }
+    /*
+     * Reject non-legacy dtypes. They need to use the new API to add casts and
+     * doing that would have added a cast to the from descriptor's castingimpl
+     * dict
+     */
+    else if (!NPY_DT_is_legacy(from) || !NPY_DT_is_legacy(to)) {
+        Py_RETURN_NONE;
+    }
     else if (from->type_num < NPY_NTYPES && to->type_num < NPY_NTYPES) {
         /* All builtin dtypes have their casts explicitly defined. */
         PyErr_Format(PyExc_RuntimeError,
@@ -187,10 +197,6 @@ PyArray_GetCastingImpl(PyArray_DTypeMeta *from, PyArray_DTypeMeta *to)
         return NULL;
     }
     else {
-        /* Reject non-legacy dtypes (they need to use the new API) */
-        if (!NPY_DT_is_legacy(from) || !NPY_DT_is_legacy(to)) {
-            Py_RETURN_NONE;
-        }
         if (from != to) {
             /* A cast function must have been registered */
             PyArray_VectorUnaryFunc *castfunc = PyArray_GetCastFunc(
@@ -329,7 +335,7 @@ PyArray_CastToType(PyArrayObject *arr, PyArray_Descr *dtype, int is_f_order)
         return NULL;
     }
 
-    Py_SETREF(dtype, PyArray_AdaptDescriptorToArray(arr, (PyObject *)dtype));
+    Py_SETREF(dtype, PyArray_AdaptDescriptorToArray(arr, NULL, dtype));
     if (dtype == NULL) {
         return NULL;
     }
@@ -1148,7 +1154,7 @@ PyArray_CastDescrToDType(PyArray_Descr *descr, PyArray_DTypeMeta *given_DType)
  */
 NPY_NO_EXPORT PyArray_Descr *
 PyArray_FindConcatenationDescriptor(
-        npy_intp n, PyArrayObject **arrays, PyObject *requested_dtype)
+        npy_intp n, PyArrayObject **arrays, PyArray_Descr *requested_dtype)
 {
     if (requested_dtype == NULL) {
         return PyArray_ResultType(n, arrays, 0, NULL);
@@ -1533,8 +1539,8 @@ static int min_scalar_type_num(char *valueptr, int type_num,
                                             NPY_DOUBLE, is_small_unsigned);
             }
             */
-            if (value.real > -3.4e38 && value.real < 3.4e38 &&
-                     value.imag > -3.4e38 && value.imag < 3.4e38) {
+            if (npy_creal(value) > -3.4e38 && npy_creal(value) < 3.4e38 &&
+                     npy_cimag(value) > -3.4e38 && npy_cimag(value) < 3.4e38) {
                 return NPY_CFLOAT;
             }
             break;
@@ -1547,12 +1553,12 @@ static int min_scalar_type_num(char *valueptr, int type_num,
                                             NPY_LONGDOUBLE, is_small_unsigned);
             }
             */
-            if (value.real > -3.4e38 && value.real < 3.4e38 &&
-                     value.imag > -3.4e38 && value.imag < 3.4e38) {
+            if (npy_creall(value) > -3.4e38 && npy_creall(value) < 3.4e38 &&
+                     npy_cimagl(value) > -3.4e38 && npy_cimagl(value) < 3.4e38) {
                 return NPY_CFLOAT;
             }
-            else if (value.real > -1.7e308 && value.real < 1.7e308 &&
-                     value.imag > -1.7e308 && value.imag < 1.7e308) {
+            else if (npy_creall(value) > -1.7e308 && npy_creall(value) < 1.7e308 &&
+                     npy_cimagl(value) > -1.7e308 && npy_cimagl(value) < 1.7e308) {
                 return NPY_CDOUBLE;
             }
             break;
@@ -2342,10 +2348,12 @@ PyArray_ConvertToCommonType(PyObject *op, int *retn)
         }
 
         mps[i] = (PyArrayObject *)PyArray_FROM_O(tmp);
-        Py_DECREF(tmp);
         if (mps[i] == NULL) {
+            Py_DECREF(tmp);
             goto fail;
         }
+        npy_mark_tmp_array_if_pyscalar(tmp, mps[i], NULL);
+        Py_DECREF(tmp);
     }
 
     common_descr = PyArray_ResultType(n, mps, 0, NULL);
@@ -2414,8 +2422,7 @@ PyArray_AddCastingImplementation(PyBoundArrayMethodObject *meth)
             return -1;
         }
         Py_INCREF(meth->method);
-        NPY_DT_SLOTS(meth->dtypes[0])->within_dtype_castingimpl = (
-                (PyObject *)meth->method);
+        NPY_DT_SLOTS(meth->dtypes[0])->within_dtype_castingimpl = meth->method;
 
         return 0;
     }
@@ -2668,7 +2675,7 @@ add_numeric_cast(PyArray_DTypeMeta *from, PyArray_DTypeMeta *to)
          * consider moving this warning into the inner-loop at some point
          * for simplicity (this requires ensuring it is only emitted once).
          */
-        slots[5].slot = NPY_METH_get_loop;
+        slots[5].slot = _NPY_METH_get_loop;
         slots[5].pfunc = &complex_to_noncomplex_get_loop;
         slots[6].slot = 0;
         slots[6].pfunc = NULL;
@@ -2689,7 +2696,7 @@ add_numeric_cast(PyArray_DTypeMeta *from, PyArray_DTypeMeta *to)
         /* When there is no casting (equivalent C-types) use byteswap loops */
         slots[0].slot = NPY_METH_resolve_descriptors;
         slots[0].pfunc = &legacy_same_dtype_resolve_descriptors;
-        slots[1].slot = NPY_METH_get_loop;
+        slots[1].slot = _NPY_METH_get_loop;
         slots[1].pfunc = &get_byteswap_loop;
         slots[2].slot = 0;
         slots[2].pfunc = NULL;
@@ -2873,7 +2880,7 @@ add_other_to_and_from_string_cast(
      */
     PyArray_DTypeMeta *dtypes[2] = {other, string};
     PyType_Slot slots[] = {
-            {NPY_METH_get_loop, &legacy_cast_get_strided_loop},
+            {_NPY_METH_get_loop, &legacy_cast_get_strided_loop},
             {NPY_METH_resolve_descriptors, &cast_to_string_resolve_descriptors},
             {0, NULL}};
     PyArrayMethod_Spec spec = {
@@ -3012,7 +3019,7 @@ PyArray_InitializeStringCasts(void)
     /* string<->string and unicode<->unicode have their own specialized casts */
     PyArray_DTypeMeta *dtypes[2];
     PyType_Slot slots[] = {
-            {NPY_METH_get_loop, &string_to_string_get_loop},
+            {_NPY_METH_get_loop, &string_to_string_get_loop},
             {NPY_METH_resolve_descriptors, &string_to_string_resolve_descriptors},
             {0, NULL}};
     PyArrayMethod_Spec spec = {
@@ -3711,7 +3718,7 @@ PyArray_InitializeVoidToVoidCast(void)
     PyArray_DTypeMeta *Void = PyArray_DTypeFromTypeNum(NPY_VOID);
     PyArray_DTypeMeta *dtypes[2] = {Void, Void};
     PyType_Slot slots[] = {
-            {NPY_METH_get_loop, &void_to_void_get_loop},
+            {_NPY_METH_get_loop, &void_to_void_get_loop},
             {NPY_METH_resolve_descriptors, &void_to_void_resolve_descriptors},
             {0, NULL}};
     PyArrayMethod_Spec spec = {
@@ -3894,7 +3901,7 @@ PyArray_InitializeObjectToObjectCast(void)
     PyArray_DTypeMeta *Object = PyArray_DTypeFromTypeNum(NPY_OBJECT);
     PyArray_DTypeMeta *dtypes[2] = {Object, Object};
     PyType_Slot slots[] = {
-            {NPY_METH_get_loop, &object_to_object_get_loop},
+            {_NPY_METH_get_loop, &object_to_object_get_loop},
             {0, NULL}};
     PyArrayMethod_Spec spec = {
             .name = "object_to_object_cast",

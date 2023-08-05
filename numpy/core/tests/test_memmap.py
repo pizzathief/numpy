@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryFile
 
 from numpy import (
-    memmap, sum, average, product, ndarray, isscalar, add, subtract, multiply)
+    memmap, sum, average, prod, ndarray, isscalar, add, subtract, multiply)
 
 from numpy import arange, allclose, asarray
 from numpy.testing import (
@@ -153,7 +153,7 @@ class TestMemmap:
 
         with suppress_warnings() as sup:
             sup.filter(FutureWarning, "np.average currently does not preserve")
-            for unary_op in [sum, average, product]:
+            for unary_op in [sum, average, prod]:
                 result = unary_op(fp)
                 assert_(isscalar(result))
                 assert_(result.__class__ is self.data[0, 0].__class__)
@@ -213,3 +213,9 @@ class TestMemmap:
 
         # ok now the file is not empty
         memmap(self.tmpfp, shape=(0,4), mode='w+')
+    
+    def test_shape_type(self):
+        memmap(self.tmpfp, shape=3, mode='w+')
+        memmap(self.tmpfp, shape=self.shape, mode='w+')
+        memmap(self.tmpfp, shape=list(self.shape), mode='w+')
+        memmap(self.tmpfp, shape=asarray(self.shape), mode='w+')

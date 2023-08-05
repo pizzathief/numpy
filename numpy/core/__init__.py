@@ -92,7 +92,6 @@ from . import einsumfunc
 from .einsumfunc import *
 del nt
 
-from .fromnumeric import amax as max, amin as min, round_ as round
 from .numeric import absolute as abs
 
 # do this after everything else, to minimize the chance of this misleadingly
@@ -143,11 +142,14 @@ def _DType_reconstruct(scalar_type):
 
 
 def _DType_reduce(DType):
-    # To pickle a DType without having to add top-level names, pickle the
-    # scalar type for now (and assume that reconstruction will be possible).
-    if DType is dtype:
-        return "dtype"  # must pickle `np.dtype` as a singleton.
-    scalar_type = DType.type  # pickle the scalar type for reconstruction
+    # As types/classes, most DTypes can simply be pickled by their name:
+    if not DType._legacy or DType.__module__ == "numpy.dtypes":
+        return DType.__name__
+
+    # However, user defined legacy dtypes (like rational) do not end up in
+    # `numpy.dtypes` as module and do not have a public class at all.
+    # For these, we pickle them by reconstructing them from the scalar type:
+    scalar_type = DType.type
     return _DType_reconstruct, (scalar_type,)
 
 

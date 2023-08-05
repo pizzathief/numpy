@@ -428,6 +428,7 @@ def copyto(
 
 def putmask(
     a: NDArray[Any],
+    /,
     mask: _ArrayLikeBool_co,
     values: ArrayLike,
 ) -> None: ...
@@ -592,11 +593,6 @@ def asfortranarray(
     *,
     like: None | _SupportsArrayFunc = ...,
 ) -> NDArray[Any]: ...
-
-# In practice `list[Any]` is list with an int, int and a valid
-# `np.seterrcall()` object
-def geterrobj() -> list[Any]: ...
-def seterrobj(errobj: list[Any], /) -> None: ...
 
 def promote_types(__type1: DTypeLike, __type2: DTypeLike) -> dtype[Any]: ...
 

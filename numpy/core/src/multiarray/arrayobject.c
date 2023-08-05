@@ -56,10 +56,14 @@ maintainer email:  oliphant.travis@ieee.org
 #include "alloc.h"
 #include "mem_overlap.h"
 #include "numpyos.h"
+#include "refcount.h"
 #include "strfuncs.h"
 
 #include "binop_override.h"
 #include "array_coercion.h"
+
+
+NPY_NO_EXPORT npy_bool numpy_warn_if_no_mem_policy = 0;
 
 /*NUMPY_API
   Compute the size of an array (in number of items)
@@ -452,14 +456,15 @@ array_dealloc(PyArrayObject *self)
     }
 
     if ((fa->flags & NPY_ARRAY_OWNDATA) && fa->data) {
-        /* Free internal references if an Object array */
-        if (PyDataType_FLAGCHK(fa->descr, NPY_ITEM_REFCOUNT)) {
-            PyArray_XDECREF(self);
+        /* Free any internal references */
+        if (PyDataType_REFCHK(fa->descr)) {
+            if (PyArray_ClearArray(self) < 0) {
+                PyErr_WriteUnraisable(NULL);
+            }
         }
         if (fa->mem_handler == NULL) {
-            char *env = getenv("NUMPY_WARN_IF_NO_MEM_POLICY");
-            if ((env != NULL) && (strncmp(env, "1", 1) == 0)) {
-                char const * msg = "Trying to dealloc data, but a memory policy "
+            if (numpy_warn_if_no_mem_policy) {
+                char const *msg = "Trying to dealloc data, but a memory policy "
                     "is not set. If you take ownership of the data, you must "
                     "set a base owning the data (e.g. a PyCapsule).";
                 WARN_IN_DEALLOC(PyExc_RuntimeWarning, msg);
@@ -994,7 +999,7 @@ array_richcompare(PyArrayObject *self, PyObject *other, int cmp_op)
      * TODO: If/once we correctly push structured comparisons into the ufunc
      *       we could consider pushing this path into the ufunc itself as a
      *       fallback loop (which ignores the input arrays).
-     *       This would have the advantage that subclasses implemementing
+     *       This would have the advantage that subclasses implementing
      *       `__array_ufunc__` do not explicitly need `__eq__` and `__ne__`.
      */
     if (result == NULL
@@ -1220,7 +1225,7 @@ array_new(PyTypeObject *subtype, PyObject *args, PyObject *kwds)
                                      (int)dims.len,
                                      dims.ptr,
                                      strides.ptr, NULL, is_f_order, NULL, NULL,
-                                     0, 1);
+                                     _NPY_ARRAY_ALLOW_EMPTY_STRING);
         if (ret == NULL) {
             descr = NULL;
             goto fail;
@@ -1257,7 +1262,7 @@ array_new(PyTypeObject *subtype, PyObject *args, PyObject *kwds)
                 subtype, descr,
                 dims.len, dims.ptr, strides.ptr, offset + (char *)buffer.ptr,
                 buffer.flags, NULL, buffer.base,
-                0, 1);
+                _NPY_ARRAY_ALLOW_EMPTY_STRING);
         if (ret == NULL) {
             descr = NULL;
             goto fail;

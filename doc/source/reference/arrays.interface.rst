@@ -179,7 +179,7 @@ This approach to the interface consists of the object having an
 
    **offset** (optional)
        An integer offset into the array data region. This can only be
-       used when data is ``None`` or returns a :class:`buffer`
+       used when data is ``None`` or returns a :class:`memoryview`
        object.
 
        **Default**: ``0``.
@@ -252,7 +252,7 @@ flag is present.
 
 .. note::
 
-    :obj:`__array_struct__` is considered legacy and should not be used for new
+    :obj:`~object.__array_struct__` is considered legacy and should not be used for new
     code. Use the :doc:`buffer protocol <python:c-api/buffer>` or the DLPack protocol
     `numpy.from_dlpack` instead.
 

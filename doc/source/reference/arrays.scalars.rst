@@ -293,6 +293,10 @@ elements the data type consists of.)
    :members: __init__
    :exclude-members: __init__
 
+.. autoclass:: numpy.character
+   :members: __init__
+   :exclude-members: __init__
+
 .. autoclass:: numpy.bytes_
    :members: __init__
    :exclude-members: __init__
@@ -333,8 +337,6 @@ are also provided.
 .. note that these are documented with ..attribute because that is what
    autoclass does for aliases under the hood.
 
-.. autoclass:: numpy.bool8
-
 .. attribute:: int8
                int16
                int32
@@ -362,7 +364,7 @@ are also provided.
 .. attribute:: intp
 
    Alias for the signed integer type (one of `numpy.byte`, `numpy.short`,
-   `numpy.intc`, `numpy.int_` and `np.longlong`) that is the same size as a
+   `numpy.intc`, `numpy.int_` and `numpy.longlong`) that is the same size as a
    pointer.
 
    Compatible with the C ``intptr_t``.
@@ -372,7 +374,7 @@ are also provided.
 .. attribute:: uintp
 
    Alias for the unsigned integer type (one of `numpy.ubyte`, `numpy.ushort`,
-   `numpy.uintc`, `numpy.uint` and `np.ulonglong`) that is the same size as a
+   `numpy.uintc`, `numpy.uint` and `numpy.ulonglong`) that is the same size as a
    pointer.
 
    Compatible with the C ``uintptr_t``.
