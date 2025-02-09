@@ -10,9 +10,9 @@ objects in C.
 Data types
 ----------
 
-In addition to the `npy_datetime` and `npy_timedelta` typedefs for `npy_int64`,
-NumPy defines two additional structs that represent time unit metadata and
-an "exploded" view of a datetime.
+In addition to the :c:type:`npy_datetime` and :c:type:`npy_timedelta` typedefs
+for :c:type:`npy_int64`, NumPy defines two additional structs that represent
+time unit metadata and an "exploded" view of a datetime.
 
 .. c:type:: PyArray_DatetimeMetaData
 
@@ -181,7 +181,7 @@ Conversion functions
 
     ``out_bestunit`` gives a suggested unit based on the amount of
     resolution provided in the string, or -1 for NaT.
-    
+
     ``out_special`` gets set to 1 if the parsed time was 'today',
     'now', empty string, or 'NaT'. For 'today', the unit recommended is
     'D', for 'now', the unit recommended is 's', and for 'NaT'
@@ -194,7 +194,7 @@ Conversion functions
 
     Returns the string length to use for converting datetime
     objects with the given local time and unit settings to strings.
-    Use this when constructings strings to supply to
+    Use this when constructing strings to supply to
     ``NpyDatetime_MakeISO8601Datetime``.
 
 .. c:function:: int NpyDatetime_MakeISO8601Datetime(\
@@ -217,14 +217,14 @@ Conversion functions
     ``base`` restricts the output to that unit. Set ``base`` to
     -1 to auto-detect a base after which all the values are zero.
 
-     ``tzoffset`` is used if ``local`` is enabled, and ``tzoffset`` is
-     set to a value other than -1. This is a manual override for
-     the local time zone to use, as an offset in minutes.
+    ``tzoffset`` is used if ``local`` is enabled, and ``tzoffset`` is
+    set to a value other than -1. This is a manual override for
+    the local time zone to use, as an offset in minutes.
 
-     ``casting`` controls whether data loss is allowed by truncating
-     the data to a coarser unit. This interacts with ``local``, slightly,
-     in order to form a date unit string as a local time, the casting
-     must be unsafe.
+    ``casting`` controls whether data loss is allowed by truncating
+    the data to a coarser unit. This interacts with ``local``, slightly,
+    in order to form a date unit string as a local time, the casting
+    must be unsafe.
 
-     Returns 0 on success, -1 on failure (for example if the output
-     string was too short).
+    Returns 0 on success, -1 on failure (for example if the output
+    string was too short).

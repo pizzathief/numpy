@@ -1,20 +1,19 @@
 .. _global_state:
 
-************
-Global state
-************
+****************************
+Global Configuration Options
+****************************
 
-NumPy has a few import-time, compile-time, or runtime options
-which change the global behaviour.
-Most of these are related to performance or for debugging
-purposes and will not be interesting to the vast majority
-of users.
+NumPy has a few import-time, compile-time, or runtime configuration
+options which change the global behaviour.  Most of these are related to
+performance or for debugging purposes and will not be interesting to the
+vast majority of users.
 
 
 Performance-related options
 ===========================
 
-Number of threads used for Linear Algebra
+Number of threads used for linear algebra
 -----------------------------------------
 
 NumPy itself is normally intentionally limited to a single thread
@@ -28,7 +27,7 @@ One way to control the number of threads is the package
 `threadpoolctl <https://pypi.org/project/threadpoolctl/>`_
 
 
-Madvise Hugepage on Linux
+madvise hugepage on Linux
 -------------------------
 
 When working with very large arrays on modern Linux kernels,
@@ -58,20 +57,6 @@ See :ref:`runtime-simd-dispatch`.
 
 Debugging-related options
 =========================
-
-Relaxed strides checking
-------------------------
-
-The *compile-time* environment variable::
-
-    NPY_RELAXED_STRIDES_DEBUG=0
-
-can be set to help debug code written in C which iterators through arrays
-manually.  When an array is contiguous and iterated in a contiguous manner,
-its ``strides`` should not be queried.  This option can help find errors where
-the ``strides`` are incorrectly used.
-For details see the :ref:`memory layout <memory-layout>` documentation.
-
 
 Warn if no memory allocation policy when deallocating data
 ----------------------------------------------------------

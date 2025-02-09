@@ -149,6 +149,7 @@ class _FileOpeners:
         self._load()
         return self._file_openers[key]
 
+
 _file_openers = _FileOpeners()
 
 def open(path, mode='r', destpath=os.curdir, encoding=None, newline=None):
@@ -192,7 +193,7 @@ def open(path, mode='r', destpath=os.curdir, encoding=None, newline=None):
     return ds.open(path, mode, encoding=encoding, newline=newline)
 
 
-@set_module('numpy')
+@set_module('numpy.lib.npyio')
 class DataSource:
     """
     DataSource(destpath='.')
@@ -216,7 +217,7 @@ class DataSource:
     URLs require a scheme string (``http://``) to be used, without it they
     will fail::
 
-        >>> repos = np.DataSource()
+        >>> repos = np.lib.npyio.DataSource()
         >>> repos.exists('www.google.com/index.html')
         False
         >>> repos.exists('http://www.google.com/index.html')
@@ -228,13 +229,13 @@ class DataSource:
     --------
     ::
 
-        >>> ds = np.DataSource('/home/guido')
+        >>> ds = np.lib.npyio.DataSource('/home/guido')
         >>> urlname = 'http://www.google.com/'
         >>> gfile = ds.open('http://www.google.com/')
         >>> ds.abspath(urlname)
         '/home/guido/www.google.com/index.html'
 
-        >>> ds = np.DataSource(None)  # use with temporary file
+        >>> ds = np.lib.npyio.DataSource(None)  # use with temporary file
         >>> ds.open('/home/guido/foobar.txt')
         <open file '/home/guido.foobar.txt', mode 'r' at 0x91d4430>
         >>> ds.abspath('/home/guido/foobar.txt')
@@ -271,10 +272,7 @@ class DataSource:
 
         # Currently only used to test the bz2 files.
         _writemodes = ("w", "+")
-        for c in mode:
-            if c in _writemodes:
-                return True
-        return False
+        return any(c in _writemodes for c in mode)
 
     def _splitzipext(self, filename):
         """Split zip extension from filename and return filename.
@@ -296,7 +294,7 @@ class DataSource:
         if not self._iszip(filename):
             for zipext in _file_openers.keys():
                 if zipext:
-                    names.append(filename+zipext)
+                    names.append(filename + zipext)
         return names
 
     def _isurl(self, path):
@@ -423,7 +421,7 @@ class DataSource:
             last = path
             # Note: os.path.join treats '/' as os.sep on Windows
             path = path.lstrip(os.sep).lstrip('/')
-            path = path.lstrip(os.pardir).lstrip('..')
+            path = path.lstrip(os.pardir).removeprefix('..')
             drive, path = os.path.splitdrive(path)  # for Windows
         return path
 
@@ -477,7 +475,7 @@ class DataSource:
             try:
                 netfile = urlopen(path)
                 netfile.close()
-                del(netfile)
+                del netfile
                 return True
             except URLError:
                 return False

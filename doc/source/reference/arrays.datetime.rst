@@ -3,16 +3,14 @@
 .. _arrays.datetime:
 
 ************************
-Datetimes and Timedeltas
+Datetimes and timedeltas
 ************************
-
-.. versionadded:: 1.7.0
 
 Starting in NumPy 1.7, there are core array data types which natively
 support datetime functionality. The data type is called :class:`datetime64`,
 so named because :class:`~datetime.datetime` is already taken by the Python standard library.
 
-Datetime64 Conventions and Assumptions
+Datetime64 conventions and assumptions
 ======================================
 
 Similar to the Python `~datetime.date` class, dates are expressed in the current
@@ -42,7 +40,7 @@ etc.). [#]_
        yet implemented. See also the `shortcomings`_ section below.
 
 
-Basic Datetimes
+Basic datetimes
 ===============
 
 The most basic way to create datetimes is from strings in ISO 8601 date
@@ -59,7 +57,11 @@ letters, for a "Not A Time" value.
 
 .. admonition:: Example
 
+  .. try_examples::
+
     A simple ISO date:
+
+    >>> import numpy as np
 
     >>> np.datetime64('2005-02-25')
     np.datetime64('2005-02-25')
@@ -95,6 +97,10 @@ datetime type with generic units.
 
 .. admonition:: Example
 
+  .. try_examples::
+
+    >>> import numpy as np
+
     >>> np.array(['2007-07-13', '2006-01-13', '2010-08-13'], dtype='datetime64')
     array(['2007-07-13', '2006-01-13', '2010-08-13'], dtype='datetime64[D]')
 
@@ -106,6 +112,10 @@ An array of datetimes can be constructed from integers representing
 POSIX timestamps with the given unit.
 
 .. admonition:: Example
+
+  .. try_examples::
+
+    >>> import numpy as np
 
     >>> np.array([0, 1577836800], dtype='datetime64[s]')
     array(['1970-01-01T00:00:00', '2020-01-01T00:00:00'],
@@ -120,7 +130,11 @@ example :func:`arange` can be used to generate ranges of dates.
 
 .. admonition:: Example
 
+  .. try_examples::
+
     All the dates for one month:
+
+    >>> import numpy as np
 
     >>> np.arange('2005-02', '2005-03', dtype='datetime64[D]')
     array(['2005-02-01', '2005-02-02', '2005-02-03', '2005-02-04',
@@ -140,6 +154,10 @@ because the moment of time is still being represented exactly.
 
 .. admonition:: Example
 
+  .. try_examples::
+
+    >>> import numpy as np
+
     >>> np.datetime64('2005') == np.datetime64('2005-01-01')
     True
 
@@ -154,7 +172,7 @@ because the moment of time is still being represented exactly.
   future.
 
 
-Datetime and Timedelta Arithmetic
+Datetime and timedelta arithmetic
 =================================
 
 NumPy allows the subtraction of two datetime values, an operation which
@@ -166,6 +184,10 @@ to represent the number of units, and a date/time unit, such as
 data type also accepts the string "NAT" in place of the number for a "Not A Time" value.
 
 .. admonition:: Example
+
+  .. try_examples::
+
+    >>> import numpy as np
 
     >>> np.timedelta64(1, 'D')
     np.timedelta64(1,'D')
@@ -180,6 +202,10 @@ Datetimes and Timedeltas work together to provide ways for
 simple datetime calculations.
 
 .. admonition:: Example
+
+  .. try_examples::
+
+    >>> import numpy as np
 
     >>> np.datetime64('2009-01-01') - np.datetime64('2008-01-01')
     np.timedelta64(366,'D')
@@ -205,10 +231,18 @@ simple datetime calculations.
 There are two Timedelta units ('Y', years and 'M', months) which are treated
 specially, because how much time they represent changes depending
 on when they are used. While a timedelta day unit is equivalent to
-24 hours, there is no way to convert a month unit into days, because
-different months have different numbers of days.
+24 hours, month and year units cannot be converted directly into days
+without using 'unsafe' casting.
+
+The `numpy.ndarray.astype` method can be used for unsafe
+conversion of months/years to days. The conversion follows
+calculating the averaged values from the 400 year leap-year cycle.
 
 .. admonition:: Example
+
+  .. try_examples::
+
+    >>> import numpy as np
 
     >>> a = np.timedelta64(1, 'Y')
 
@@ -220,7 +254,8 @@ different months have different numbers of days.
       File "<stdin>", line 1, in <module>
     TypeError: Cannot cast NumPy timedelta64 scalar from metadata [Y] to [D] according to the rule 'same_kind'
 
-Datetime Units
+
+Datetime units
 ==============
 
 The Datetime and Timedelta data types support a large number of time
@@ -268,7 +303,7 @@ us / μs    microsecond      +/- 2.9e5 years         [290301 BC, 294241 AD]
    as      attosecond       +/- 9.2 seconds         [  1969 AD,   1970 AD]
 ======== ================ ======================= ==========================
 
-Business Day Functionality
+Business day functionality
 ==========================
 
 To allow the datetime to be used in contexts where only certain days of
@@ -288,6 +323,10 @@ specified in business days to datetimes with a unit of 'D' (day).
 
 .. admonition:: Example
 
+  .. try_examples::
+
+    >>> import numpy as np
+
     >>> np.busday_offset('2011-06-23', 1)
     np.datetime64('2011-06-24')
 
@@ -301,6 +340,10 @@ default rule is 'raise', which simply raises an exception.
 The rules most typically used are 'forward' and 'backward'.
 
 .. admonition:: Example
+
+  .. try_examples::
+
+    >>> import numpy as np
 
     >>> np.busday_offset('2011-06-25', 2)
     Traceback (most recent call last):
@@ -324,7 +367,11 @@ is necessary to get a desired answer.
 
 .. admonition:: Example
 
+  .. try_examples::
+
     The first business day on or after a date:
+
+    >>> import numpy as np
 
     >>> np.busday_offset('2011-03-20', 0, roll='forward')
     np.datetime64('2011-03-21')
@@ -345,6 +392,10 @@ weekmask.
 
 .. admonition:: Example
 
+  .. try_examples::
+
+    >>> import numpy as np
+
     >>> np.busday_offset('2012-05', 1, roll='forward', weekmask='Sun')
     np.datetime64('2012-05-13')
 
@@ -358,6 +409,10 @@ np.is_busday():
 To test a `datetime64` value to see if it is a valid day, use :func:`is_busday`.
 
 .. admonition:: Example
+
+  .. try_examples::
+
+    >>> import numpy as np
 
     >>> np.is_busday(np.datetime64('2011-07-15'))  # a Friday
     True
@@ -376,6 +431,10 @@ dates, use :func:`busday_count`:
 
 .. admonition:: Example
 
+  .. try_examples::
+
+    >>> import numpy as np
+
     >>> np.busday_count(np.datetime64('2011-07-11'), np.datetime64('2011-07-18'))
     5
     >>> np.busday_count(np.datetime64('2011-07-18'), np.datetime64('2011-07-11'))
@@ -386,13 +445,17 @@ how many of them are valid dates, you can do this:
 
 .. admonition:: Example
 
+  .. try_examples::
+
+    >>> import numpy as np
+
     >>> a = np.arange(np.datetime64('2011-07-11'), np.datetime64('2011-07-18'))
     >>> np.count_nonzero(np.is_busday(a))
     5
 
 
 
-Custom Weekmasks
+Custom weekmasks
 ----------------
 
 Here are several examples of custom weekmask values.  These examples
@@ -433,6 +496,10 @@ given below.
     23:59:60.450 UTC" is a valid timestamp which is not parseable by
     `datetime64`:
 
+    .. try_examples::
+
+      >>> import numpy as np
+
       >>> np.datetime64("2016-12-31 23:59:60.450")
       Traceback (most recent call last):
         File "<stdin>", line 1, in <module>
@@ -446,14 +513,18 @@ given below.
     Compute the number of SI seconds between "2021-01-01 12:56:23.423 UTC" and
     "2001-01-01 00:00:00.000 UTC":
 
+    .. try_examples::
+
+      >>> import numpy as np
+
       >>> (
       ...   np.datetime64("2021-01-01 12:56:23.423")
       ...   - np.datetime64("2001-01-01")
       ... ) / np.timedelta64(1, "s")
       631198583.423
 
-    however correct answer is `631198588.423` SI seconds because there were 5
-    leap seconds between 2001 and 2021.
+      However, the correct answer is `631198588.423` SI seconds, because there were
+      5 leap seconds between 2001 and 2021.
 
 - Timedelta64 computations for dates in the past do not return SI seconds, as
   one would expect.
@@ -464,16 +535,20 @@ given below.
      where UT is `universal time
      <https://en.wikipedia.org/wiki/Universal_Time>`_:
 
+    .. try_examples::
+
+      >>> import numpy as np
+
       >>> a = np.datetime64("0000-01-01", "us")
       >>> b = np.datetime64("1600-01-01", "us")
       >>> b - a
       numpy.timedelta64(50491123200000000,'us')
 
-     The computed results, `50491123200` seconds, is obtained as the elapsed
-     number of days (`584388`) times `86400` seconds; this is the number of
-     seconds of a clock in sync with earth rotation. The exact value in SI
-     seconds can only be estimated, e.g using data published in `Measurement of
-     the Earth's rotation: 720 BC to AD 2015, 2016, Royal Society's Proceedings
-     A 472, by Stephenson et.al. <https://doi.org/10.1098/rspa.2016.0404>`_. A
-     sensible estimate is `50491112870 ± 90` seconds, with a difference of 10330
-     seconds.
+      The computed results, `50491123200` seconds, are obtained as the elapsed
+      number of days (`584388`) times `86400` seconds; this is the number of
+      seconds of a clock in sync with the Earth's rotation. The exact value in SI
+      seconds can only be estimated, e.g., using data published in `Measurement of
+      the Earth's rotation: 720 BC to AD 2015, 2016, Royal Society's Proceedings
+      A 472, by Stephenson et.al. <https://doi.org/10.1098/rspa.2016.0404>`_. A
+      sensible estimate is `50491112870 ± 90` seconds, with a difference of 10330
+      seconds.
